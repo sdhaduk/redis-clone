@@ -148,8 +148,17 @@ func Decode(buf *bufio.Reader) (Value, error) {
 		if int_length == -1 {
 			return Value{Kind: Null}, nil
 		}
+		
+		if int_length < -1 {
+			return Value{}, fmt.Errorf("encoded length was %d", int_length)
+		}
+
 		data := make([]byte, int_length)
-		io.ReadFull(buf, data)
+		
+		_, err = io.ReadFull(buf, data)
+		if err != nil {
+    		return Value{}, err
+		}
 		
 		left_over, err := readLine(buf)
 		if err != nil {
