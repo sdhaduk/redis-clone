@@ -56,11 +56,6 @@ func (val *Value) Encode() []byte {
 
 	case Integer:
 		encoded := []byte{':'}
-		if val.Num < 0 {
-			encoded = append(encoded, '-')
-		} else {
-			encoded = append(encoded, '+')
-		}
 		encoded = strconv.AppendInt(encoded, val.Num, 10)
 		encoded = append(encoded, '\r', '\n')
 		return encoded
@@ -96,6 +91,9 @@ func readLine(buf *bufio.Reader) (string, error) {
 	data, err := buf.ReadString('\n')
 	if err != nil {
 		return "", err
+	}
+	if len(data) < 2 {
+		return "", fmt.Errorf("line does not end with CRLF")
 	}
 	if data[len(data) - 2:] != "\r\n" {
 		return "", fmt.Errorf("line does not end with CRLF")
@@ -150,12 +148,15 @@ func Decode(buf *bufio.Reader) (Value, error) {
 		if int_length == -1 {
 			return Value{Kind: Null}, nil
 		}
-		data := make([]byte, 0, int_length)
+		data := make([]byte, int_length)
 		io.ReadFull(buf, data)
 		
-		_, err = readLine(buf)
+		left_over, err := readLine(buf)
 		if err != nil {
 			return Value{}, err
+		}
+		if left_over != "" {
+			return Value{}, fmt.Errorf("payload longer than encoded length")
 		}
 		return Value{Kind: BulkString, Str: string(data)}, nil
 	
