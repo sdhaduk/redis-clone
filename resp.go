@@ -26,6 +26,10 @@ type Value struct {
 	Elems []Value
 }
 
+func NewInteger(num int64) Value {
+	return Value{Kind: Integer, Num: num}
+}
+
 func NewError(msg string) Value {
 	return Value{Kind: Error, Str: msg}
 }
@@ -181,7 +185,7 @@ func Decode(buf *bufio.Reader) (Value, error) {
 		}
 
 		elems := []Value{}
-		for  i := 0; i < int_arr_len; i++ {
+		for range int_arr_len {
 			cur_val, err := Decode(buf)
 			if err != nil {
 				return Value{}, err
