@@ -1,39 +1,54 @@
 package main
 
-import "strings"
+import (
+	"strings"
+	"time"
+)
 
 type Message struct {
 	Args []string
 	Reply chan Value
 }
 
+type entry struct {
+	val string
+	expiresAt time.Time
+}
+
 func RunCommander(requests chan Message) {
-	store := make(map[string]string)
+	store := make(map[string]entry)
 
 	for msg := range requests {
 		switch strings.ToUpper(msg.Args[0]) {
 		case "SET":
-			if len(msg.Args) != 3 {
-				msg.Reply <- Value{Kind: Error, Str: "ERR wrong number of arguments for 'set' command"}
-				continue
-			}
-			store[msg.Args[1]] = msg.Args[2]
-			msg.Reply <- Value{Kind: SimpleString, Str: "OK"}
-		
+			msg.Reply <- cmdSet(store, msg.Args)
+			
 		case "GET":
-			if len(msg.Args) != 2 {
-				msg.Reply <- Value{Kind: Error, Str: "ERR wrong number of arguments for 'get' command"}
-				continue
-			}
-			val, ok := store[msg.Args[1]]
-			if ok {
-				msg.Reply <- Value{Kind: BulkString, Str: val}
-				continue
-			}
-			msg.Reply <- Value{Kind: Null}
+			msg.Reply <- cmdGet(store, msg.Args)		
 		
+		case "EXPIRE":
+			msg.Reply <- cmdExpire(store, msg.Args)
+
+		case "TTL":
+			msg.Reply <- cmdTTL(store, msg.Args)
+
+		case "DEL":
+			msg.Reply <- cmdDel(store, msg.Args)
+		
+		case "EXISTS":
+			msg.Reply <- cmdExists(store, msg.Args)
+		
+		case "KEYS":
+			msg.Reply <- cmdKeys(store, msg.Args)
+			
+		case "INCR":
+			msg.Reply <- cmdIncr(store, msg.Args)
+		
+		case "DECR":
+			msg.Reply <- cmdDecr(store, msg.Args)
+
 		default:
-			msg.Reply <- Value{Kind: Error, Str: "ERR unknown command name"}
+			msg.Reply <- NewError("ERR unknown command name")
 		}
 	}
 }
