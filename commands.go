@@ -22,6 +22,17 @@ func lookup(store map[string]entry, key string) (entry, bool) {
 	return ent, true
 }
 
+func sweep(store map[string]entry) {
+	count := 0 
+	for key := range store {
+		lookup(store, key)
+		count += 1
+		if count >= 20 {
+			break
+		}
+	}	
+}
+
 func cmdGet(store map[string]entry, args []string) Value {
 	if len(args) != 2 {
 		return NewError("ERR wrong number of arguments for 'GET' command")
@@ -137,9 +148,9 @@ func cmdKeys(store map[string]entry, args []string) Value {
 				return NewError(fmt.Sprintf("ERR %s", err))
 			}
 			if matched {
-				ent, ok := lookup(store, key)
+				_, ok := lookup(store, key)
 				if ok {
-					elems = append(elems, NewBulkString(ent.val))
+					elems = append(elems, NewBulkString(key))
 				}
 			}
 		}
