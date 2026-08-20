@@ -393,3 +393,58 @@ func cmdRPop(store map[string]entry, args []string) Value {
 	}
 	return NewError("ERR wrong number of arguments for 'RPOP' command")
 }
+
+func cmdLPop(store map[string]entry, args []string) Value {
+	if len(args) == 2 {
+		ent, ok := lookup(store, args[1])
+		if !ok {
+			return Value{Kind: Null}
+		}
+		if ent.Kind != List {
+			return wrongTypeErr
+		}
+		popped := ent.List[0]
+		updated_list := ent.List[1:]
+		if len(updated_list) == 0 {
+			delete(store, args[1])
+		} else {
+			ent.List = updated_list
+			store[args[1]] = ent
+		}
+		return NewBulkString(popped)
+	}
+
+	if len(args) == 3 {
+		ent, ok := lookup(store, args[1])
+		if !ok {
+			return Value{Kind: Null}
+		}
+		if ent.Kind != List {
+			return wrongTypeErr
+		}
+		count, err := strconv.Atoi(args[2])
+		if err != nil {
+			return NewError(fmt.Sprintf("ERR %s", err))
+		}
+		if count <= 0 {
+			return NewError("ERR value is out of range, must be positive")
+		}
+		if count > len(ent.List) {
+			count = len(ent.List)
+		}
+		items := []Value{}
+		for i := 0; i < count; i++ {
+			items = append(items, Value{Kind: BulkString, Str: ent.List[i]})
+		}
+		updated_list := ent.List[count:]
+		if len(updated_list) == 0 {
+			delete(store, args[1])
+		} else {
+			ent.List = updated_list
+			store[args[1]] = ent
+		}
+		return Value{Kind: Array, Elems: items}	
+	}
+	return NewError("ERR wrong number of arguments for 'LPOP' command")
+}
+
