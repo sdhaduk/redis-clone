@@ -538,3 +538,104 @@ func HGetAll(store map[string]entry, args []string) Value {
 	return NewError("ERR wrong number of arguments for 'HGETALL' command")
 }
 
+func cmdSAdd(store map[string]entry, args []string) Value {
+	if len(args) >= 3 {
+		ent, ok := lookup(store, args[1])
+		if !ok {
+			ent = entry{Kind: Set, Set: make(map[string]struct{})}
+		}
+		if ent.Kind != Set {
+			return wrongTypeErr
+		}
+		count := 0
+		for i := 2; i < len(args); i++ {
+			_, ok := ent.Set[args[i]]
+			if ok {
+				continue
+			}
+			ent.Set[args[i]] = struct{}{}
+			count += 1
+		}
+		store[args[1]] = ent
+		return NewInteger(int64(count))
+	}
+	return NewError("ERR wrong number of arguments for 'SADD' command")
+}
+
+func cmdSRem(store map[string]entry, args []string) Value {
+	if len(args) >= 3 {
+		ent, ok := lookup(store, args[1])
+		if !ok {
+			return NewInteger(0)
+		}
+		if ent.Kind != Set {
+			return wrongTypeErr
+		}
+		count := 0
+		for idx := 2; idx < len(args); idx++ {
+			_, ok = ent.Set[args[idx]]
+			if !ok {
+				continue
+			}
+			count += 1
+			delete(ent.Set, args[idx])
+		}
+		if len(ent.Set) == 0 {
+			delete(store, args[1])
+		}
+		return NewInteger(int64(count))	
+	}
+	return NewError("ERR wrong number of arguments for 'SREM' command")
+}
+
+func cmdSIsMember(store map[string]entry, args []string) Value {
+	if len(args) == 3 {
+		ent, ok := lookup(store, args[1])
+		if !ok {
+			return NewInteger(0)
+		}
+		if ent.Kind != Set {
+			return wrongTypeErr
+		}
+		_, ok = ent.Set[args[2]]
+		if !ok {
+			return NewInteger(0)
+		}
+		return NewInteger(1)
+	}
+	return NewError("ERR wrong number of arguments for 'SISMEMBER' command")
+}
+
+func cmdSMembers(store map[string]entry, args []string) Value {
+	if len(args) == 2 {
+		ent, ok := lookup(store, args[1])
+		if !ok {
+			return Value{Kind: Array}
+		}
+		if ent.Kind != Set {
+			return wrongTypeErr
+		}
+		elems := []Value{}
+		for key := range ent.Set {
+			elems = append(elems, NewBulkString(key))
+		}
+		return Value{Kind: Array, Elems: elems}
+	}
+	return NewError("ERR wrong number of arguments for 'SMEMBERS' command")
+}
+
+func cmdSCard(store map[string]entry, args []string) Value {
+	if len(args) == 2 {
+		ent, ok := lookup(store, args[1])
+		if !ok {
+			return NewInteger(0)
+		}
+		if ent.Kind != Set {
+			return wrongTypeErr
+		}
+		return NewInteger(int64(len(ent.Set)))
+	}
+	return NewError("ERR wrong number of arguments for 'SCARD' command")
+}
+
+
