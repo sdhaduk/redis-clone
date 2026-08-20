@@ -448,3 +448,93 @@ func cmdLPop(store map[string]entry, args []string) Value {
 	return NewError("ERR wrong number of arguments for 'LPOP' command")
 }
 
+func HSet(store map[string]entry, args []string) Value {
+	if len(args) >= 4 {
+		if len(args) % 2 != 0 {
+			return NewError("ERR number of arguments for 'HSET' command must be even")
+		}
+		new := 0
+		ent, ok := lookup(store, args[1])
+		if !ok {
+			ent = entry{Kind: Hash, Hash: make(map[string]string)}
+		}
+		if ent.Kind != Hash {
+			return wrongTypeErr
+		}
+		idx := 2
+		for idx < len(args) {
+			_, ok := ent.Hash[args[idx]] 
+			if !ok {
+				new += 1
+			}	
+			ent.Hash[args[idx]] = args[idx + 1]
+			idx += 2
+		} 
+		store[args[1]] = ent
+		return NewInteger(int64(new))	
+	}
+	return NewError("ERR wrong number of arguments for 'HSET' command")
+}
+
+func HGet(store map[string]entry, args []string) Value {
+	if len(args) == 3 {
+		ent, ok := lookup(store, args[1])
+		if !ok {
+			return Value{Kind: Null}
+		}
+		if ent.Kind != Hash {
+			return wrongTypeErr
+		}
+		val, ok := ent.Hash[args[2]]
+		if !ok {
+			return Value{Kind: Null}
+		}
+		return NewBulkString(val)
+	}	
+	return NewError("ERR wrong number of arguments for 'HGET' command")
+}
+
+func HDel(store map[string]entry, args []string) Value {
+	if len(args) >= 3 {
+		ent, ok := lookup(store, args[1])
+		if !ok {
+			return NewInteger(int64(0))
+		}
+		if ent.Kind != Hash {
+			return wrongTypeErr
+		}
+		count := 0
+		for idx := 2; idx < len(args); idx++ {
+			_, ok = ent.Hash[args[idx]]
+			if !ok {
+				continue
+			}
+			count += 1
+			delete(ent.Hash, args[idx])
+		}
+		if len(ent.Hash) == 0 {
+			delete(store, args[1])
+		}
+		return NewInteger(int64(count))
+	}
+	return NewError("ERR wrong number of arguments for 'HDEL' command")
+}
+
+func HGetAll(store map[string]entry, args []string) Value {
+	if len(args) == 2 {
+		ent, ok := lookup(store, args[1])
+		if !ok {
+			return Value{Kind: Array}
+		}
+		if ent.Kind != Hash {
+			return wrongTypeErr
+		}
+		elems := []Value{}
+		for key, val := range ent.Hash {
+			elems = append(elems, Value{Kind: BulkString, Str: key}, Value{Kind: BulkString, Str: val})	
+		}
+		return Value{Kind: Array, Elems: elems}
+	}
+	return NewError("ERR wrong number of arguments for 'HGETALL' command")
+}
+
