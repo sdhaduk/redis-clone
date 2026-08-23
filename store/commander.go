@@ -1,19 +1,11 @@
-package main
+package store
 
 import (
+	"redis-clone/resp"
+
 	"strings"
 	"time"
 )
-
-type Message struct {
-	Args  []string
-	Reply chan Value
-}
-
-type entry struct {
-	val       string
-	expiresAt time.Time
-}
 
 func RunCommander(requests chan Message) {
 	store := make(map[string]entry)
@@ -55,7 +47,7 @@ func RunCommander(requests chan Message) {
 				msg.Reply <- cmdDecr(store, msg.Args)
 
 			default:
-				msg.Reply <- NewError("ERR unknown command name")
+				msg.Reply <- resp.NewError("ERR unknown command name")
 			}
 
 		case <-ticker.C:

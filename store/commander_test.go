@@ -1,6 +1,8 @@
-package main
+package store
 
 import (
+	"redis-clone/resp"
+
 	"sort"
 	"testing"
 	"time"
@@ -8,21 +10,21 @@ import (
 
 // ---------- helpers ----------
 
-func assertInteger(t *testing.T, got Value, want int64) {
+func assertInteger(t *testing.T, got resp.Value, want int64) {
 	t.Helper()
-	if got.Kind != Integer || got.Num != want {
+	if got.Kind != resp.Integer || got.Num != want {
 		t.Errorf("got %+v, want Integer %d", got, want)
 	}
 }
 
-func assertBulkString(t *testing.T, got Value, want string) {
+func assertBulkString(t *testing.T, got resp.Value, want string) {
 	t.Helper()
-	if got.Kind != BulkString || got.Str != want {
+	if got.Kind != resp.BulkString || got.Str != want {
 		t.Errorf("got %+v, want BulkString %q", got, want)
 	}
 }
 
-func assertKind(t *testing.T, got Value, want RedisType) {
+func assertKind(t *testing.T, got resp.Value, want resp.RedisType) {
 	t.Helper()
 	if got.Kind != want {
 		t.Errorf("got %+v, want Kind %v", got, want)
@@ -66,7 +68,7 @@ func TestLookup(t *testing.T) {
 func TestCmdSetGet(t *testing.T) {
 	store := make(map[string]entry)
 
-	assertKind(t, cmdSet(store, []string{"SET", "name", "sagar"}), SimpleString)
+	assertKind(t, cmdSet(store, []string{"SET", "name", "sagar"}), resp.SimpleString)
 	assertBulkString(t, cmdGet(store, []string{"GET", "name"}), "sagar")
 
 	// overwrite
@@ -74,32 +76,32 @@ func TestCmdSetGet(t *testing.T) {
 	assertBulkString(t, cmdGet(store, []string{"GET", "name"}), "bob")
 
 	// missing key -> Null
-	assertKind(t, cmdGet(store, []string{"GET", "missing"}), Null)
+	assertKind(t, cmdGet(store, []string{"GET", "missing"}), resp.Null)
 
 	// wrong arg counts -> Error, never a panic
-	assertKind(t, cmdGet(store, []string{"GET"}), Error)
-	assertKind(t, cmdGet(store, []string{"GET", "a", "b"}), Error)
-	assertKind(t, cmdSet(store, []string{"SET", "k"}), Error)
-	assertKind(t, cmdSet(store, []string{"SET", "k", "v", "EX"}), Error)
+	assertKind(t, cmdGet(store, []string{"GET"}), resp.Error)
+	assertKind(t, cmdGet(store, []string{"GET", "a", "b"}), resp.Error)
+	assertKind(t, cmdSet(store, []string{"SET", "k"}), resp.Error)
+	assertKind(t, cmdSet(store, []string{"SET", "k", "v", "EX"}), resp.Error)
 }
 
 func TestCmdSetExpiryOptions(t *testing.T) {
 	store := make(map[string]entry)
 
 	// EX: key exists now, TTL is positive
-	assertKind(t, cmdSet(store, []string{"SET", "k", "v", "EX", "100"}), SimpleString)
+	assertKind(t, cmdSet(store, []string{"SET", "k", "v", "EX", "100"}), resp.SimpleString)
 	assertBulkString(t, cmdGet(store, []string{"GET", "k"}), "v")
 	assertInteger(t, cmdTTL(store, []string{"TTL", "k"}), 100)
 
 	// EX/PX are case-insensitive like all of Redis
-	assertKind(t, cmdSet(store, []string{"SET", "k2", "v", "ex", "100"}), SimpleString)
+	assertKind(t, cmdSet(store, []string{"SET", "k2", "v", "ex", "100"}), resp.SimpleString)
 	assertInteger(t, cmdTTL(store, []string{"TTL", "k2"}), 100)
 
 	// PX: value readable immediately, gone after the deadline passes
-	assertKind(t, cmdSet(store, []string{"SET", "p", "v", "PX", "50"}), SimpleString)
+	assertKind(t, cmdSet(store, []string{"SET", "p", "v", "PX", "50"}), resp.SimpleString)
 	assertBulkString(t, cmdGet(store, []string{"GET", "p"}), "v")
 	time.Sleep(60 * time.Millisecond)
-	assertKind(t, cmdGet(store, []string{"GET", "p"}), Null)
+	assertKind(t, cmdGet(store, []string{"GET", "p"}), resp.Null)
 
 	// plain SET on a key that had a TTL clears the TTL
 	cmdSet(store, []string{"SET", "s", "v", "EX", "100"})
@@ -107,10 +109,10 @@ func TestCmdSetExpiryOptions(t *testing.T) {
 	assertInteger(t, cmdTTL(store, []string{"TTL", "s"}), -1)
 
 	// bad expire arguments -> Error
-	assertKind(t, cmdSet(store, []string{"SET", "k", "v", "EX", "0"}), Error)
-	assertKind(t, cmdSet(store, []string{"SET", "k", "v", "EX", "-5"}), Error)
-	assertKind(t, cmdSet(store, []string{"SET", "k", "v", "EX", "abc"}), Error)
-	assertKind(t, cmdSet(store, []string{"SET", "k", "v", "XX", "10"}), Error)
+	assertKind(t, cmdSet(store, []string{"SET", "k", "v", "EX", "0"}), resp.Error)
+	assertKind(t, cmdSet(store, []string{"SET", "k", "v", "EX", "-5"}), resp.Error)
+	assertKind(t, cmdSet(store, []string{"SET", "k", "v", "EX", "abc"}), resp.Error)
+	assertKind(t, cmdSet(store, []string{"SET", "k", "v", "XX", "10"}), resp.Error)
 }
 
 // ---------- EXPIRE / TTL ----------
@@ -140,9 +142,9 @@ func TestCmdExpireAndTTL(t *testing.T) {
 	assertInteger(t, cmdExpire(store, []string{"EXPIRE", "gone", "10"}), 0)
 
 	// bad arguments -> Error
-	assertKind(t, cmdExpire(store, []string{"EXPIRE", "plain", "abc"}), Error)
-	assertKind(t, cmdExpire(store, []string{"EXPIRE", "plain"}), Error)
-	assertKind(t, cmdTTL(store, []string{"TTL"}), Error)
+	assertKind(t, cmdExpire(store, []string{"EXPIRE", "plain", "abc"}), resp.Error)
+	assertKind(t, cmdExpire(store, []string{"EXPIRE", "plain"}), resp.Error)
+	assertKind(t, cmdTTL(store, []string{"TTL"}), resp.Error)
 }
 
 // ---------- DEL / EXISTS ----------
@@ -163,25 +165,25 @@ func TestCmdDelExists(t *testing.T) {
 
 	// DEL returns how many it actually removed, and removes them
 	assertInteger(t, cmdDel(store, []string{"DEL", "a", "missing", "b"}), 2)
-	assertKind(t, cmdGet(store, []string{"GET", "a"}), Null)
-	assertKind(t, cmdGet(store, []string{"GET", "b"}), Null)
+	assertKind(t, cmdGet(store, []string{"GET", "a"}), resp.Null)
+	assertKind(t, cmdGet(store, []string{"GET", "b"}), resp.Null)
 
 	// wrong arg counts -> Error
-	assertKind(t, cmdDel(store, []string{"DEL"}), Error)
-	assertKind(t, cmdExists(store, []string{"EXISTS"}), Error)
+	assertKind(t, cmdDel(store, []string{"DEL"}), resp.Error)
+	assertKind(t, cmdExists(store, []string{"EXISTS"}), resp.Error)
 }
 
 // ---------- KEYS ----------
 
 // keysOf unpacks a KEYS reply into a sorted []string of key names.
-func keysOf(t *testing.T, v Value) []string {
+func keysOf(t *testing.T, v resp.Value) []string {
 	t.Helper()
-	if v.Kind != Array {
+	if v.Kind != resp.Array {
 		t.Fatalf("KEYS reply: got %+v, want an Array", v)
 	}
 	names := []string{}
 	for _, e := range v.Elems {
-		if e.Kind != BulkString {
+		if e.Kind != resp.BulkString {
 			t.Fatalf("KEYS element: got %+v, want a BulkString", e)
 		}
 		names = append(names, e.Str)
@@ -216,7 +218,7 @@ func TestCmdKeys(t *testing.T) {
 
 	// no match -> empty Array, NOT Null
 	v := cmdKeys(store, []string{"KEYS", "zzz*"})
-	if v.Kind != Array || len(v.Elems) != 0 {
+	if v.Kind != resp.Array || len(v.Elems) != 0 {
 		t.Errorf("KEYS zzz* returned %+v, want empty Array", v)
 	}
 
@@ -251,7 +253,7 @@ func TestCmdIncrDecr(t *testing.T) {
 	// non-integer value -> the canonical error, not a panic
 	cmdSet(store, []string{"SET", "s", "abc"})
 	v := cmdIncr(store, []string{"INCR", "s"})
-	if v.Kind != Error || v.Str != "ERR value is not an integer or out of range" {
+	if v.Kind != resp.Error || v.Str != "ERR value is not an integer or out of range" {
 		t.Errorf("INCR on non-integer: got %+v, want the canonical ERR message", v)
 	}
 
@@ -261,8 +263,8 @@ func TestCmdIncrDecr(t *testing.T) {
 	assertInteger(t, cmdTTL(store, []string{"TTL", "c"}), 100)
 
 	// wrong arg counts -> Error
-	assertKind(t, cmdIncr(store, []string{"INCR"}), Error)
-	assertKind(t, cmdDecr(store, []string{"DECR", "a", "b"}), Error)
+	assertKind(t, cmdIncr(store, []string{"INCR"}), resp.Error)
+	assertKind(t, cmdDecr(store, []string{"DECR", "a", "b"}), resp.Error)
 }
 
 // ---------- sweep ----------

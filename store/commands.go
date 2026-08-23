@@ -1,6 +1,8 @@
-package main
+package store
 
 import (
+	"redis-clone/resp"
+
 	"fmt"
 	"path"
 	"strconv"
@@ -10,7 +12,7 @@ import (
 
 type Message struct {
 	Args  []string
-	Reply chan Value
+	Reply chan resp.Value
 }
 
 type DataType int
@@ -23,15 +25,15 @@ const (
 )
 
 type entry struct {
-	Kind DataType
-	Str string
-	List []string
-	Hash map[string]string
-	Set map[string]struct{}
+	Kind      DataType
+	Str       string
+	List      []string
+	Hash      map[string]string
+	Set       map[string]struct{}
 	expiresAt time.Time
 }
 
-var wrongTypeErr Value = Value{Kind: Error, Str:"WRONGTYPE Operation against a key holding the wrong kind of value"}
+var wrongTypeErr resp.Value = resp.Value{Kind: resp.Error, Str: "WRONGTYPE Operation against a key holding the wrong kind of value"}
 
 func lookup(store map[string]entry, key string) (entry, bool) {
 	ent, ok := store[key]
@@ -48,14 +50,14 @@ func lookup(store map[string]entry, key string) (entry, bool) {
 }
 
 func sweep(store map[string]entry) {
-	count := 0 
+	count := 0
 	for key := range store {
 		lookup(store, key)
 		count += 1
 		if count >= 20 {
 			break
 		}
-	}	
+	}
 }
 
 func normalizeRange(start, stop, length int) (int, int, bool) {
@@ -65,11 +67,11 @@ func normalizeRange(start, stop, length int) (int, int, bool) {
 	if stop < 0 {
 		stop += length
 	}
-	
+
 	if start < 0 {
 		start = 0
 	}
-	if stop > length - 1 {
+	if stop > length-1 {
 		stop = length - 1
 	}
 
@@ -79,87 +81,87 @@ func normalizeRange(start, stop, length int) (int, int, bool) {
 	return start, stop, true
 }
 
-func cmdGet(store map[string]entry, args []string) Value {
+func cmdGet(store map[string]entry, args []string) resp.Value {
 	if len(args) != 2 {
-		return NewError("ERR wrong number of arguments for 'GET' command")
+		return resp.NewError("ERR wrong number of arguments for 'GET' command")
 	}
 	ent, ok := lookup(store, args[1])
 	if ok {
 		if ent.Kind != String {
 			return wrongTypeErr
 		}
-		return NewBulkString(ent.Str)
+		return resp.NewBulkString(ent.Str)
 	}
-	return Value{Kind: Null}
+	return resp.Value{Kind: resp.Null}
 }
 
-func cmdSet(store map[string]entry, args []string) Value {
+func cmdSet(store map[string]entry, args []string) resp.Value {
 	if len(args) == 3 {
 		store[args[1]] = entry{Str: args[2], Kind: String}
-		return NewSimpleString("OK")
+		return resp.NewSimpleString("OK")
 	}
-	
+
 	if len(args) == 5 {
 		count, err := strconv.ParseInt(args[4], 10, 64)
 		if err != nil {
-			return NewError(fmt.Sprintf("ERR %s", err))	
+			return resp.NewError(fmt.Sprintf("ERR %s", err))
 		}
 		if count <= 0 {
-			return NewError("ERR invalid expire time in 'SET' command")
+			return resp.NewError("ERR invalid expire time in 'SET' command")
 		}
 
 		if strings.ToUpper(args[3]) == "EX" {
 			store[args[1]] = entry{Str: args[2], expiresAt: time.Now().Add(time.Second * time.Duration(count)), Kind: String}
-			return NewSimpleString("OK")
+			return resp.NewSimpleString("OK")
 		}
 		if strings.ToUpper(args[3]) == "PX" {
 			store[args[1]] = entry{Str: args[2], expiresAt: time.Now().Add(time.Millisecond * time.Duration(count)), Kind: String}
-			return NewSimpleString("OK")
+			return resp.NewSimpleString("OK")
 		}
 
-		return NewError(fmt.Sprintf("ERR command '%s' not recognized", args[3]))
-	}	
+		return resp.NewError(fmt.Sprintf("ERR command '%s' not recognized", args[3]))
+	}
 
-	return NewError("ERR wrong number of arguments for 'SET' command")
+	return resp.NewError("ERR wrong number of arguments for 'SET' command")
 }
 
-func cmdExpire(store map[string]entry, args []string) Value {
+func cmdExpire(store map[string]entry, args []string) resp.Value {
 	if len(args) == 3 {
 		count, err := strconv.ParseInt(args[2], 10, 64)
 		if err != nil {
-			return NewError(fmt.Sprintf("ERR %s", err))	
+			return resp.NewError(fmt.Sprintf("ERR %s", err))
 		}
 		if count <= 0 {
-			return NewError("ERR invalid expire time in 'EXPIRE' command")
+			return resp.NewError("ERR invalid expire time in 'EXPIRE' command")
 		}
-		
+
 		ent, ok := lookup(store, args[1])
 		if ok {
-			ent.expiresAt = time.Now().Add(time.Second * time.Duration(count)) 
+			ent.expiresAt = time.Now().Add(time.Second * time.Duration(count))
 			store[args[1]] = ent
-			return NewInteger(1)
+			return resp.NewInteger(1)
 		}
-		return NewInteger(0)
+		return resp.NewInteger(0)
 	}
 
-	return NewError("ERR wrong number of arguments for 'EXPIRE' command")
+	return resp.NewError("ERR wrong number of arguments for 'EXPIRE' command")
 }
 
-func cmdTTL(store map[string]entry, args []string) Value {
+func cmdTTL(store map[string]entry, args []string) resp.Value {
 	if len(args) == 2 {
 		ent, ok := lookup(store, args[1])
 		if !ok {
-			return NewInteger(-2)
+			return resp.NewInteger(-2)
 		}
 		if ent.expiresAt.IsZero() {
-			return NewInteger(-1)
+			return resp.NewInteger(-1)
 		}
-		return NewInteger(int64(time.Until(ent.expiresAt).Round(time.Second) / time.Second))
+		return resp.NewInteger(int64(time.Until(ent.expiresAt).Round(time.Second) / time.Second))
 	}
-	return NewError("ERR wrong number of arguments for 'TTL' command")
+	return resp.NewError("ERR wrong number of arguments for 'TTL' command")
 }
 
-func cmdDel(store map[string]entry, args []string) Value {
+func cmdDel(store map[string]entry, args []string) resp.Value {
 	if len(args) > 1 {
 		var count int64 = 0
 		for _, key := range args[1:] {
@@ -169,12 +171,12 @@ func cmdDel(store map[string]entry, args []string) Value {
 				delete(store, key)
 			}
 		}
-		return NewInteger(count)
+		return resp.NewInteger(count)
 	}
-	return NewError("ERR wrong number of arguments for 'DEL' command")	
+	return resp.NewError("ERR wrong number of arguments for 'DEL' command")
 }
 
-func cmdExists(store map[string]entry, args []string) Value {
+func cmdExists(store map[string]entry, args []string) resp.Value {
 	if len(args) > 1 {
 		var count int64 = 0
 		for _, key := range args[1:] {
@@ -183,78 +185,78 @@ func cmdExists(store map[string]entry, args []string) Value {
 				count += 1
 			}
 		}
-		return NewInteger(count)
+		return resp.NewInteger(count)
 	}
-	return NewError("ERR wrong number of arguments for 'EXISTS' command")	
+	return resp.NewError("ERR wrong number of arguments for 'EXISTS' command")
 }
 
-func cmdKeys(store map[string]entry, args []string) Value {
+func cmdKeys(store map[string]entry, args []string) resp.Value {
 	if len(args) == 2 {
-		elems := []Value{}
+		elems := []resp.Value{}
 		for key := range store {
 			matched, err := path.Match(args[1], key)
 			if err != nil {
-				return NewError(fmt.Sprintf("ERR %s", err))
+				return resp.NewError(fmt.Sprintf("ERR %s", err))
 			}
 			if matched {
 				_, ok := lookup(store, key)
 				if ok {
-					elems = append(elems, NewBulkString(key))
+					elems = append(elems, resp.NewBulkString(key))
 				}
 			}
 		}
-		return Value{Kind: Array, Elems: elems}
+		return resp.Value{Kind: resp.Array, Elems: elems}
 	}
-	return NewError("ERR wrong number of arguments for 'KEYS' command")
+	return resp.NewError("ERR wrong number of arguments for 'KEYS' command")
 }
 
-func cmdIncr(store map[string]entry, args []string)	Value {
+func cmdIncr(store map[string]entry, args []string) resp.Value {
 	if len(args) == 2 {
 		ent, ok := lookup(store, args[1])
 		if !ok {
 			store[args[1]] = entry{Str: "1", Kind: String}
-			return NewInteger(1)
+			return resp.NewInteger(1)
 		}
 		if ent.Kind != String {
 			return wrongTypeErr
 		}
 		num, err := strconv.ParseInt(ent.Str, 10, 64)
 		if err != nil {
-			return NewError("ERR value is not an integer or out of range")
+			return resp.NewError("ERR value is not an integer or out of range")
 		}
-		store[args[1]] = entry{Str: strconv.FormatInt(num + 1, 10), expiresAt: ent.expiresAt, Kind: String}
-		return NewInteger(num + 1)
+		store[args[1]] = entry{Str: strconv.FormatInt(num+1, 10), expiresAt: ent.expiresAt, Kind: String}
+		return resp.NewInteger(num + 1)
 	}
-	return NewError("ERR wrong number of arguments for 'INCR' command")
+	return resp.NewError("ERR wrong number of arguments for 'INCR' command")
 }
 
-func cmdDecr(store map[string]entry, args []string)	Value {
+func cmdDecr(store map[string]entry, args []string) resp.Value {
 	if len(args) == 2 {
 		ent, ok := lookup(store, args[1])
 		if !ok {
 			store[args[1]] = entry{Str: "-1", Kind: String}
-			return NewInteger(-1)
+			return resp.NewInteger(-1)
 		}
 		if ent.Kind != String {
 			return wrongTypeErr
-		}	
+		}
 		num, err := strconv.ParseInt(ent.Str, 10, 64)
 		if err != nil {
-			return NewError("ERR value is not an integer or out of range")
+			return resp.NewError("ERR value is not an integer or out of range")
 		}
-		store[args[1]] = entry{Str: strconv.FormatInt(num - 1, 10), expiresAt: ent.expiresAt, Kind: String}
-		return NewInteger(num - 1)
+		store[args[1]] = entry{Str: strconv.FormatInt(num-1, 10), expiresAt: ent.expiresAt, Kind: String}
+		return resp.NewInteger(num - 1)
 	}
-	return NewError("ERR wrong number of arguments for 'DECR' command")
+	return resp.NewError("ERR wrong number of arguments for 'DECR' command")
 }
 
-func cmdLPush(store map[string]entry, args []string) Value {
+func cmdLPush(store map[string]entry, args []string) resp.Value {
 	if len(args) >= 3 {
 		ent, ok := lookup(store, args[1])
 		if ok && ent.Kind != List {
 			return wrongTypeErr
 		}
-		new_list := make([]string, len(args) - 2)
+		new_list := make([]string, len(args)-2)
 		args_counter := 2
 		for i := len(new_list) - 1; i >= 0; i-- {
 			new_list[i] = args[args_counter]
@@ -262,89 +264,89 @@ func cmdLPush(store map[string]entry, args []string) Value {
 		}
 		if !ok {
 			store[args[1]] = entry{Kind: List, List: new_list}
-			return NewInteger(int64(len(new_list)))
+			return resp.NewInteger(int64(len(new_list)))
 		}
 		new_list = append(new_list, ent.List...)
 		store[args[1]] = entry{Kind: List, List: new_list, expiresAt: ent.expiresAt}
-		return NewInteger(int64(len(new_list)))
+		return resp.NewInteger(int64(len(new_list)))
 	}
-	return NewError("ERR wrong number of arguments for 'LPUSH' command")	
+	return resp.NewError("ERR wrong number of arguments for 'LPUSH' command")
 }
 
-func cmdRPush(store map[string]entry, args []string) Value {
+func cmdRPush(store map[string]entry, args []string) resp.Value {
 	if len(args) >= 3 {
 		ent, ok := lookup(store, args[1])
 		if ok && ent.Kind != List {
 			return wrongTypeErr
 		}
-		new_list := make([]string, len(args) - 2)
+		new_list := make([]string, len(args)-2)
 		args_counter := 2
-		for i := 0; i < len(args) - 2; i++ {
+		for i := 0; i < len(args)-2; i++ {
 			new_list[i] = args[args_counter]
 			args_counter += 1
 		}
 		if !ok {
 			store[args[1]] = entry{Kind: List, List: new_list}
-			return NewInteger(int64(len(new_list)))
+			return resp.NewInteger(int64(len(new_list)))
 		}
 		new_list = append(ent.List, new_list...)
 		store[args[1]] = entry{Kind: List, List: new_list, expiresAt: ent.expiresAt}
-		return NewInteger(int64(len(new_list)))
+		return resp.NewInteger(int64(len(new_list)))
 	}
-	return NewError("ERR wrong number of arguments for 'RPUSH' command")	
-}	
+	return resp.NewError("ERR wrong number of arguments for 'RPUSH' command")
+}
 
-func cmdLLen(store map[string]entry, args []string) Value {
+func cmdLLen(store map[string]entry, args []string) resp.Value {
 	if len(args) == 2 {
 		ent, ok := lookup(store, args[1])
 		if !ok {
-			return NewInteger(0)
+			return resp.NewInteger(0)
 		}
 		if ent.Kind != List {
 			return wrongTypeErr
 		}
-		return NewInteger(int64(len(ent.List)))
+		return resp.NewInteger(int64(len(ent.List)))
 	}
-	return NewError("ERR wrong number of arguments for 'LLEN' command")	
+	return resp.NewError("ERR wrong number of arguments for 'LLEN' command")
 }
 
-func cmdLRange(store map[string]entry, args []string) Value {
+func cmdLRange(store map[string]entry, args []string) resp.Value {
 	if len(args) == 4 {
 		start, err := strconv.Atoi(args[2])
 		if err != nil {
-			return NewError(fmt.Sprintf("ERR %s", err))
+			return resp.NewError(fmt.Sprintf("ERR %s", err))
 		}
 		stop, err := strconv.Atoi(args[3])
 		if err != nil {
-			return NewError(fmt.Sprintf("ERR %s", err))
+			return resp.NewError(fmt.Sprintf("ERR %s", err))
 		}
 		ent, ok := lookup(store, args[1])
 		if !ok {
-			return Value{Kind: Array}
+			return resp.Value{Kind: resp.Array}
 		}
 		if ent.Kind != List {
 			return wrongTypeErr
 		}
 		start, stop, ok = normalizeRange(start, stop, len(ent.List))
 		if !ok {
-			return Value{Kind: Array}
+			return resp.Value{Kind: resp.Array}
 		}
-		
-		elems := []Value{}
+
+		elems := []resp.Value{}
 		for i := start; i <= stop; i++ {
-			item := Value{Kind: BulkString, Str: ent.List[i]}
+			item := resp.Value{Kind: resp.BulkString, Str: ent.List[i]}
 			elems = append(elems, item)
 		}
-		return Value{Kind: Array, Elems: elems}
+		return resp.Value{Kind: resp.Array, Elems: elems}
 	}
-	return NewError("ERR wrong number of arguments for 'LRANGE' command")		
+	return resp.NewError("ERR wrong number of arguments for 'LRANGE' command")
 }
 
-func cmdRPop(store map[string]entry, args []string) Value {
+func cmdRPop(store map[string]entry, args []string) resp.Value {
 	if len(args) == 2 {
 		ent, ok := lookup(store, args[1])
 		if !ok {
-			return Value{Kind: Null}
+			return resp.Value{Kind: resp.Null}
 		}
 		if ent.Kind != List {
 			return wrongTypeErr
@@ -357,30 +359,30 @@ func cmdRPop(store map[string]entry, args []string) Value {
 			ent.List = updated_list
 			store[args[1]] = ent
 		}
-		return NewBulkString(popped)
+		return resp.NewBulkString(popped)
 	}
 
 	if len(args) == 3 {
 		ent, ok := lookup(store, args[1])
 		if !ok {
-			return Value{Kind: Null}
+			return resp.Value{Kind: resp.Null}
 		}
 		if ent.Kind != List {
 			return wrongTypeErr
 		}
 		count, err := strconv.Atoi(args[2])
 		if err != nil {
-			return NewError(fmt.Sprintf("ERR %s", err))
+			return resp.NewError(fmt.Sprintf("ERR %s", err))
 		}
 		if count <= 0 {
-			return NewError("ERR value is out of range, must be positive")
+			return resp.NewError("ERR value is out of range, must be positive")
 		}
 		if count > len(ent.List) {
 			count = len(ent.List)
 		}
-		items := []Value{}
+		items := []resp.Value{}
 		for i := 0; i < count; i++ {
-			items = append(items, Value{Kind: BulkString, Str: ent.List[len(ent.List)-1-i]})
+			items = append(items, resp.Value{Kind: resp.BulkString, Str: ent.List[len(ent.List)-1-i]})
 		}
 		updated_list := ent.List[:len(ent.List)-count]
 		if len(updated_list) == 0 {
@@ -389,16 +391,16 @@ func cmdRPop(store map[string]entry, args []string) Value {
 			ent.List = updated_list
 			store[args[1]] = ent
 		}
-		return Value{Kind: Array, Elems: items}	
+		return resp.Value{Kind: resp.Array, Elems: items}
 	}
-	return NewError("ERR wrong number of arguments for 'RPOP' command")
+	return resp.NewError("ERR wrong number of arguments for 'RPOP' command")
 }
 
-func cmdLPop(store map[string]entry, args []string) Value {
+func cmdLPop(store map[string]entry, args []string) resp.Value {
 	if len(args) == 2 {
 		ent, ok := lookup(store, args[1])
 		if !ok {
-			return Value{Kind: Null}
+			return resp.Value{Kind: resp.Null}
 		}
 		if ent.Kind != List {
 			return wrongTypeErr
@@ -411,30 +413,30 @@ func cmdLPop(store map[string]entry, args []string) Value {
 			ent.List = updated_list
 			store[args[1]] = ent
 		}
-		return NewBulkString(popped)
+		return resp.NewBulkString(popped)
 	}
 
 	if len(args) == 3 {
 		ent, ok := lookup(store, args[1])
 		if !ok {
-			return Value{Kind: Null}
+			return resp.Value{Kind: resp.Null}
 		}
 		if ent.Kind != List {
 			return wrongTypeErr
 		}
 		count, err := strconv.Atoi(args[2])
 		if err != nil {
-			return NewError(fmt.Sprintf("ERR %s", err))
+			return resp.NewError(fmt.Sprintf("ERR %s", err))
 		}
 		if count <= 0 {
-			return NewError("ERR value is out of range, must be positive")
+			return resp.NewError("ERR value is out of range, must be positive")
 		}
 		if count > len(ent.List) {
 			count = len(ent.List)
 		}
-		items := []Value{}
+		items := []resp.Value{}
 		for i := 0; i < count; i++ {
-			items = append(items, Value{Kind: BulkString, Str: ent.List[i]})
+			items = append(items, resp.Value{Kind: resp.BulkString, Str: ent.List[i]})
 		}
 		updated_list := ent.List[count:]
 		if len(updated_list) == 0 {
@@ -443,15 +445,15 @@ func cmdLPop(store map[string]entry, args []string) Value {
 			ent.List = updated_list
 			store[args[1]] = ent
 		}
-		return Value{Kind: Array, Elems: items}	
+		return resp.Value{Kind: resp.Array, Elems: items}
 	}
-	return NewError("ERR wrong number of arguments for 'LPOP' command")
+	return resp.NewError("ERR wrong number of arguments for 'LPOP' command")
 }
 
-func HSet(store map[string]entry, args []string) Value {
+func HSet(store map[string]entry, args []string) resp.Value {
 	if len(args) >= 4 {
-		if len(args) % 2 != 0 {
-			return NewError("ERR number of arguments for 'HSET' command must be even")
+		if len(args)%2 != 0 {
+			return resp.NewError("ERR number of arguments for 'HSET' command must be even")
 		}
 		new := 0
 		ent, ok := lookup(store, args[1])
@@ -463,42 +465,42 @@ func HSet(store map[string]entry, args []string) Value {
 		}
 		idx := 2
 		for idx < len(args) {
-			_, ok := ent.Hash[args[idx]] 
+			_, ok := ent.Hash[args[idx]]
 			if !ok {
 				new += 1
-			}	
-			ent.Hash[args[idx]] = args[idx + 1]
+			}
+			ent.Hash[args[idx]] = args[idx+1]
 			idx += 2
-		} 
+		}
 		store[args[1]] = ent
-		return NewInteger(int64(new))	
+		return resp.NewInteger(int64(new))
 	}
-	return NewError("ERR wrong number of arguments for 'HSET' command")
+	return resp.NewError("ERR wrong number of arguments for 'HSET' command")
 }
 
-func HGet(store map[string]entry, args []string) Value {
+func HGet(store map[string]entry, args []string) resp.Value {
 	if len(args) == 3 {
 		ent, ok := lookup(store, args[1])
 		if !ok {
-			return Value{Kind: Null}
+			return resp.Value{Kind: resp.Null}
 		}
 		if ent.Kind != Hash {
 			return wrongTypeErr
 		}
 		val, ok := ent.Hash[args[2]]
 		if !ok {
-			return Value{Kind: Null}
+			return resp.Value{Kind: resp.Null}
 		}
-		return NewBulkString(val)
-	}	
-	return NewError("ERR wrong number of arguments for 'HGET' command")
+		return resp.NewBulkString(val)
+	}
+	return resp.NewError("ERR wrong number of arguments for 'HGET' command")
 }
 
-func HDel(store map[string]entry, args []string) Value {
+func HDel(store map[string]entry, args []string) resp.Value {
 	if len(args) >= 3 {
 		ent, ok := lookup(store, args[1])
 		if !ok {
-			return NewInteger(int64(0))
+			return resp.NewInteger(int64(0))
 		}
 		if ent.Kind != Hash {
 			return wrongTypeErr
@@ -515,30 +517,30 @@ func HDel(store map[string]entry, args []string) Value {
 		if len(ent.Hash) == 0 {
 			delete(store, args[1])
 		}
-		return NewInteger(int64(count))
+		return resp.NewInteger(int64(count))
 	}
-	return NewError("ERR wrong number of arguments for 'HDEL' command")
+	return resp.NewError("ERR wrong number of arguments for 'HDEL' command")
 }
 
-func HGetAll(store map[string]entry, args []string) Value {
+func HGetAll(store map[string]entry, args []string) resp.Value {
 	if len(args) == 2 {
 		ent, ok := lookup(store, args[1])
 		if !ok {
-			return Value{Kind: Array}
+			return resp.Value{Kind: resp.Array}
 		}
 		if ent.Kind != Hash {
 			return wrongTypeErr
 		}
-		elems := []Value{}
+		elems := []resp.Value{}
 		for key, val := range ent.Hash {
-			elems = append(elems, Value{Kind: BulkString, Str: key}, Value{Kind: BulkString, Str: val})	
+			elems = append(elems, resp.Value{Kind: resp.BulkString, Str: key}, resp.Value{Kind: resp.BulkString, Str: val})
 		}
-		return Value{Kind: Array, Elems: elems}
+		return resp.Value{Kind: resp.Array, Elems: elems}
 	}
-	return NewError("ERR wrong number of arguments for 'HGETALL' command")
+	return resp.NewError("ERR wrong number of arguments for 'HGETALL' command")
 }
 
-func cmdSAdd(store map[string]entry, args []string) Value {
+func cmdSAdd(store map[string]entry, args []string) resp.Value {
 	if len(args) >= 3 {
 		ent, ok := lookup(store, args[1])
 		if !ok {
@@ -557,16 +559,16 @@ func cmdSAdd(store map[string]entry, args []string) Value {
 			count += 1
 		}
 		store[args[1]] = ent
-		return NewInteger(int64(count))
+		return resp.NewInteger(int64(count))
 	}
-	return NewError("ERR wrong number of arguments for 'SADD' command")
+	return resp.NewError("ERR wrong number of arguments for 'SADD' command")
 }
 
-func cmdSRem(store map[string]entry, args []string) Value {
+func cmdSRem(store map[string]entry, args []string) resp.Value {
 	if len(args) >= 3 {
 		ent, ok := lookup(store, args[1])
 		if !ok {
-			return NewInteger(0)
+			return resp.NewInteger(0)
 		}
 		if ent.Kind != Set {
 			return wrongTypeErr
@@ -583,59 +585,57 @@ func cmdSRem(store map[string]entry, args []string) Value {
 		if len(ent.Set) == 0 {
 			delete(store, args[1])
 		}
-		return NewInteger(int64(count))	
+		return resp.NewInteger(int64(count))
 	}
-	return NewError("ERR wrong number of arguments for 'SREM' command")
+	return resp.NewError("ERR wrong number of arguments for 'SREM' command")
 }
 
-func cmdSIsMember(store map[string]entry, args []string) Value {
+func cmdSIsMember(store map[string]entry, args []string) resp.Value {
 	if len(args) == 3 {
 		ent, ok := lookup(store, args[1])
 		if !ok {
-			return NewInteger(0)
+			return resp.NewInteger(0)
 		}
 		if ent.Kind != Set {
 			return wrongTypeErr
 		}
 		_, ok = ent.Set[args[2]]
 		if !ok {
-			return NewInteger(0)
+			return resp.NewInteger(0)
 		}
-		return NewInteger(1)
+		return resp.NewInteger(1)
 	}
-	return NewError("ERR wrong number of arguments for 'SISMEMBER' command")
+	return resp.NewError("ERR wrong number of arguments for 'SISMEMBER' command")
 }
 
-func cmdSMembers(store map[string]entry, args []string) Value {
+func cmdSMembers(store map[string]entry, args []string) resp.Value {
 	if len(args) == 2 {
 		ent, ok := lookup(store, args[1])
 		if !ok {
-			return Value{Kind: Array}
+			return resp.Value{Kind: resp.Array}
 		}
 		if ent.Kind != Set {
 			return wrongTypeErr
 		}
-		elems := []Value{}
+		elems := []resp.Value{}
 		for key := range ent.Set {
-			elems = append(elems, NewBulkString(key))
+			elems = append(elems, resp.NewBulkString(key))
 		}
-		return Value{Kind: Array, Elems: elems}
+		return resp.Value{Kind: resp.Array, Elems: elems}
 	}
-	return NewError("ERR wrong number of arguments for 'SMEMBERS' command")
+	return resp.NewError("ERR wrong number of arguments for 'SMEMBERS' command")
 }
 
-func cmdSCard(store map[string]entry, args []string) Value {
+func cmdSCard(store map[string]entry, args []string) resp.Value {
 	if len(args) == 2 {
 		ent, ok := lookup(store, args[1])
 		if !ok {
-			return NewInteger(0)
+			return resp.NewInteger(0)
 		}
 		if ent.Kind != Set {
 			return wrongTypeErr
 		}
-		return NewInteger(int64(len(ent.Set)))
+		return resp.NewInteger(int64(len(ent.Set)))
 	}
-	return NewError("ERR wrong number of arguments for 'SCARD' command")
+	return resp.NewError("ERR wrong number of arguments for 'SCARD' command")
 }
-
-

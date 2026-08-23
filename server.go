@@ -6,6 +6,8 @@ import (
 	"io"
 	"log"
 	"net"
+	"redis-clone/resp"
+	"redis-clone/store"
 	"strings"
 )
 
@@ -17,8 +19,8 @@ func main() {
 
 	defer listener.Close()
 
-	requests := make(chan Message)
-	go RunCommander(requests)
+	requests := make(chan store.Message)
+	go store.RunCommander(requests)
 
 	for {
 		conn, err := listener.Accept()
@@ -31,25 +33,25 @@ func main() {
 	}
 }
 
-func handleConnection(conn net.Conn, requests chan Message) {
+func handleConnection(conn net.Conn, requests chan store.Message) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
-	
+
 	for {
-		val, err := Decode(reader)
+		val, err := resp.Decode(reader)
 		if err == io.EOF {
 			return
 		}
 		if err != nil {
-			response := Value{Kind: Error, Str: fmt.Sprintf("ERR %v", err)}
+			response := resp.Value{Kind: resp.Error, Str: fmt.Sprintf("ERR %v", err)}
 			_, err = conn.Write(response.Encode())
 			if err != nil {
 				log.Println("Server write error:", err)
 			}
 			return
 		}
-		if val.Kind != Array {
-			response := Value{Kind: Error, Str: "ERR request should be of type Array"}
+		if val.Kind != resp.Array {
+			response := resp.Value{Kind: resp.Error, Str: "ERR request should be of type Array"}
 			_, err := conn.Write(response.Encode())
 			if err != nil {
 				log.Println("Server write error:", err)
@@ -57,7 +59,7 @@ func handleConnection(conn net.Conn, requests chan Message) {
 			return
 		}
 		if len(val.Elems) < 1 {
-			response := Value{Kind: Error, Str: "ERR zero arguments"}
+			response := resp.Value{Kind: resp.Error, Str: "ERR zero arguments"}
 			_, err := conn.Write(response.Encode())
 			if err != nil {
 				log.Println("Server write error:", err)
@@ -66,8 +68,8 @@ func handleConnection(conn net.Conn, requests chan Message) {
 		}
 		args := []string{}
 		for _, elem := range val.Elems {
-			if elem.Kind != BulkString {
-				response := Value{Kind: Error, Str: "ERR array elements should be of type BulkString"}
+			if elem.Kind != resp.BulkString {
+				response := resp.Value{Kind: resp.Error, Str: "ERR array elements should be of type BulkString"}
 				_, err := conn.Write(response.Encode())
 				if err != nil {
 					log.Println("Server write error:", err)
@@ -78,7 +80,7 @@ func handleConnection(conn net.Conn, requests chan Message) {
 		}
 
 		if strings.ToUpper(args[0]) == "PING" {
-			response := Value{Kind: SimpleString, Str: "PONG"}
+			response := resp.Value{Kind: resp.SimpleString, Str: "PONG"}
 			_, err := conn.Write(response.Encode())
 			if err != nil {
 				log.Println("Server write error:", err)
@@ -89,7 +91,7 @@ func handleConnection(conn net.Conn, requests chan Message) {
 
 		if strings.ToUpper(args[0]) == "ECHO" {
 			if len(args) < 2 {
-				response := Value{Kind: Error, Str: "ERR ECHO requires one argument"}
+				response := resp.Value{Kind: resp.Error, Str: "ERR ECHO requires one argument"}
 				_, err := conn.Write(response.Encode())
 				if err != nil {
 					log.Println("Server write error:", err)
@@ -97,19 +99,19 @@ func handleConnection(conn net.Conn, requests chan Message) {
 				}
 				continue
 			}
-			response := Value{Kind: BulkString, Str: args[1]}
+			response := resp.Value{Kind: resp.BulkString, Str: args[1]}
 			_, err := conn.Write(response.Encode())
 			if err != nil {
 				log.Println("Server write error:", err)
 				return
 			}
-			continue	
+			continue
 		}
 
-		reply := make(chan Value, 1)
-		msg := Message{Args: args, Reply: reply}
+		reply := make(chan resp.Value, 1)
+		msg := store.Message{Args: args, Reply: reply}
 		requests <- msg
-		response := <- reply
+		response := <-reply
 		_, err = conn.Write(response.Encode())
 		if err != nil {
 			log.Println("Server write error:", err)

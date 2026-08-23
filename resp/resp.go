@@ -1,4 +1,4 @@
-package main
+package resp
 
 import (
 	"bufio"
@@ -7,10 +7,10 @@ import (
 	"strconv"
 )
 
-type RedisType int
+type Kind int
 
 const (
-	SimpleString RedisType = iota
+	SimpleString Kind = iota
 	Error
 	Integer
 	BulkString
@@ -20,7 +20,7 @@ const (
 
 // One payload is meaningful at a time, selected by Kind
 type Value struct {
-	Kind RedisType
+	Kind Kind
 	Str string
 	Num int64
 	Elems []Value

@@ -1,4 +1,4 @@
-package main
+package skiplist
 
 import (
 	"math/rand"
@@ -20,6 +20,11 @@ type SkipList struct {
 	numNodes int
 }
 
+type nodeData struct {
+	score  float64
+	member string
+}
+
 func randomLevel() int {
 	level := 0
 	for rand.Float64() < probability && level < maxHeight-1 {
@@ -28,7 +33,28 @@ func randomLevel() int {
 	return level
 }
 
-func NewSkipList() (*SkipList) {
+func normalizeZRange(start, stop, length int) (int, int, bool) {
+	if start < 0 {
+		start += length
+	}
+	if stop < 0 {
+		stop += length
+	}
+
+	if start < 0 {
+		start = 0
+	}
+	if stop > length-1 {
+		stop = length - 1
+	}
+
+	if start > stop || start >= length {
+		return 0, 0, false
+	}
+	return start, stop, true
+}
+
+func New() *SkipList {
 	return &SkipList{head: &node{next: make([]*node, maxHeight), span: make([]int64, maxHeight)}, level: 0, numNodes: 0}
 }
 
@@ -39,7 +65,7 @@ func (n *node) precedes(score float64, member string) bool {
 	return n.member < member
 }
 
-func (sl *SkipList) search(score float64, member string) (update [maxHeight]*node, ranks [maxHeight]int64) {
+func (sl *SkipList) Search(score float64, member string) (update [maxHeight]*node, ranks [maxHeight]int64) {
 	current := sl.head
 	level := sl.level
 	var running_count int64 = 0
@@ -56,8 +82,27 @@ func (sl *SkipList) search(score float64, member string) (update [maxHeight]*nod
 	return update, ranks
 }
 
-func (sl *SkipList) insert(score float64, member string) {
-	prevNodes, ranks := sl.search(score, member)
+func (sl *SkipList) GetElem(rank int64) *node {
+	current := sl.head
+	level := sl.level
+	rank = rank + 1
+	var runningCount int64 = 0
+	for level >= 0 {
+		if current.next[level] != nil && runningCount+current.span[level] < rank {
+			runningCount += current.span[level]
+			current = current.next[level]
+			continue
+		}
+		if current.next[level] != nil && runningCount+current.span[level] == rank {
+			return current.next[level]
+		}
+		level -= 1
+	}
+	return nil
+}
+
+func (sl *SkipList) Insert(score float64, member string) {
+	prevNodes, ranks := sl.Search(score, member)
 	newNodeHeight := randomLevel()
 	newNode := &node{score: score, member: member, next: make([]*node, newNodeHeight+1), span: make([]int64, newNodeHeight+1)}
 	newNode.span[0] = 1
@@ -76,7 +121,7 @@ func (sl *SkipList) insert(score float64, member string) {
 
 		if nextNode != nil {
 			newNode.span[i] = prevNode.span[i] - (ranks[0] - ranks[i])
-		} 
+		}
 		prevNode.span[i] = (ranks[0] - ranks[i]) + 1
 
 		newNode.next[i] = nextNode
@@ -85,12 +130,12 @@ func (sl *SkipList) insert(score float64, member string) {
 
 	for i := newNodeHeight + 1; i <= sl.level; i++ {
 		prevNodes[i].span[i] += 1
-	}	
+	}
 	sl.numNodes += 1
 }
 
-func (sl *SkipList) delete(score float64, member string) bool {
-	prevNodes, _ := sl.search(score, member)
+func (sl *SkipList) Delete(score float64, member string) bool {
+	prevNodes, _ := sl.Search(score, member)
 	curNode := prevNodes[0].next[0]
 	if curNode == nil || (curNode.member != member || curNode.score != score) {
 		return false
@@ -132,8 +177,8 @@ func (sl *SkipList) oracleRank(score float64, member string) int64 {
 	return -1
 }
 
-func (sl *SkipList) rank(score float64, member string) int64 {
-	prevNodes, ranks := sl.search(score, member)
+func (sl *SkipList) Rank(score float64, member string) int64 {
+	prevNodes, ranks := sl.Search(score, member)
 	curNode := prevNodes[0].next[0]
 	if curNode != nil && curNode.score == score && curNode.member == member {
 		return ranks[0]
@@ -141,6 +186,22 @@ func (sl *SkipList) rank(score float64, member string) int64 {
 	return -1
 }
 
-func (sl *SkipList) getRange(score float64, member string) int64 (
-	
-)
+func (sl *SkipList) GetRange(start, stop int) ([]nodeData, bool) {
+	start, stop, ok := normalizeZRange(start, stop, sl.numNodes)
+	if !ok {
+		return nil, false
+	}
+	curNode := sl.GetElem(int64(start))
+	count := 1 + (stop - start)
+	nodes := make([]nodeData, 0, count)
+
+	for i := 0; i < count; i++ {
+		nodes = append(nodes, nodeData{score: curNode.score, member: curNode.member})
+		if curNode.next[0] == nil {
+			break
+		}
+		curNode = curNode.next[0]
+	}
+
+	return nodes, true
+}
