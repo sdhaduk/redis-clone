@@ -24,7 +24,7 @@ func assertBulkString(t *testing.T, got resp.Value, want string) {
 	}
 }
 
-func assertKind(t *testing.T, got resp.Value, want resp.RedisType) {
+func assertKind(t *testing.T, got resp.Value, want resp.Kind) {
 	t.Helper()
 	if got.Kind != want {
 		t.Errorf("got %+v, want Kind %v", got, want)
@@ -33,22 +33,22 @@ func assertKind(t *testing.T, got resp.Value, want resp.RedisType) {
 
 // expired returns an entry whose deadline is already in the past.
 func expired(val string) entry {
-	return entry{val: val, expiresAt: time.Now().Add(-time.Second)}
+	return entry{Str: val, Kind: String, expiresAt: time.Now().Add(-time.Second)}
 }
 
 // ---------- lookup: the lazy-expiration primitive ----------
 
 func TestLookup(t *testing.T) {
 	store := map[string]entry{
-		"live":    {val: "a"},
-		"ttl":     {val: "b", expiresAt: time.Now().Add(time.Minute)},
+		"live":    {Str: "a", Kind: String},
+		"ttl":     {Str: "b", Kind: String, expiresAt: time.Now().Add(time.Minute)},
 		"expired": expired("c"),
 	}
 
-	if ent, ok := lookup(store, "live"); !ok || ent.val != "a" {
+	if ent, ok := lookup(store, "live"); !ok || ent.Str != "a" {
 		t.Errorf("live key: got (%+v, %v), want (val \"a\", true)", ent, ok)
 	}
-	if ent, ok := lookup(store, "ttl"); !ok || ent.val != "b" {
+	if ent, ok := lookup(store, "ttl"); !ok || ent.Str != "b" {
 		t.Errorf("unexpired ttl key: got (%+v, %v), want (val \"b\", true)", ent, ok)
 	}
 	if _, ok := lookup(store, "missing"); ok {
@@ -271,8 +271,8 @@ func TestCmdIncrDecr(t *testing.T) {
 
 func TestSweep(t *testing.T) {
 	store := map[string]entry{
-		"live":  {val: "a"},
-		"ttl":   {val: "b", expiresAt: time.Now().Add(time.Minute)},
+		"live":  {Str: "a", Kind: String},
+		"ttl":   {Str: "b", Kind: String, expiresAt: time.Now().Add(time.Minute)},
 		"dead1": expired("x"),
 		"dead2": expired("y"),
 	}
