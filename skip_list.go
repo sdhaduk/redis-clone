@@ -131,3 +131,16 @@ func (sl *SkipList) oracleRank(score float64, member string) int64 {
 	}
 	return -1
 }
+
+func (sl *SkipList) rank(score float64, member string) int64 {
+	prevNodes, ranks := sl.search(score, member)
+	curNode := prevNodes[0].next[0]
+	if curNode != nil && curNode.score == score && curNode.member == member {
+		return ranks[0]
+	}
+	return -1
+}
+
+func (sl *SkipList) getRange(score float64, member string) int64 (
+	
+)
