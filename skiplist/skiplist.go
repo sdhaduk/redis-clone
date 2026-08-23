@@ -160,23 +160,6 @@ func (sl *SkipList) Delete(score float64, member string) bool {
 	return true
 }
 
-func (sl *SkipList) oracleRank(score float64, member string) int64 {
-	curNode := sl.head.next[0]
-	var count int64 = 0
-
-	for curNode != nil {
-		if curNode.score == score && curNode.member == member {
-			return count
-		}
-		if curNode.score > score && curNode.member > member {
-			return -1
-		}
-		curNode = curNode.next[0]
-		count += 1
-	}
-	return -1
-}
-
 func (sl *SkipList) Rank(score float64, member string) int64 {
 	prevNodes, ranks := sl.Search(score, member)
 	curNode := prevNodes[0].next[0]
