@@ -2,6 +2,7 @@ package store
 
 import (
 	"redis-clone/resp"
+	"redis-clone/skiplist"
 
 	"sort"
 	"testing"
@@ -291,4 +292,599 @@ func TestSweep(t *testing.T) {
 	if _, ok := store["ttl"]; !ok {
 		t.Error("sweep deleted a key whose deadline has not passed")
 	}
+}
+
+// ---------- helpers for the data-structure commands ----------
+
+func assertErrorMsg(t *testing.T, got resp.Value, want string) {
+	t.Helper()
+	if got.Kind != resp.Error || got.Str != want {
+		t.Errorf("got %+v, want Error %q", got, want)
+	}
+}
+
+// assertArray asserts an Array of BulkStrings equal to want, in order.
+func assertArray(t *testing.T, got resp.Value, want []string) {
+	t.Helper()
+	if got.Kind != resp.Array {
+		t.Errorf("got %+v, want Array %v", got, want)
+		return
+	}
+	if len(got.Elems) != len(want) {
+		t.Errorf("got %d elements %+v, want %v", len(got.Elems), got.Elems, want)
+		return
+	}
+	for i, e := range got.Elems {
+		if e.Kind != resp.BulkString || e.Str != want[i] {
+			t.Errorf("element %d: got %+v, want BulkString %q", i, e, want[i])
+		}
+	}
+}
+
+// assertArrayUnordered is assertArray for replies whose order is undefined
+// (SMEMBERS iterates a map).
+func assertArrayUnordered(t *testing.T, got resp.Value, want []string) {
+	t.Helper()
+	if got.Kind != resp.Array {
+		t.Errorf("got %+v, want Array %v", got, want)
+		return
+	}
+	names := []string{}
+	for _, e := range got.Elems {
+		names = append(names, e.Str)
+	}
+	sort.Strings(names)
+	sorted := append([]string{}, want...)
+	sort.Strings(sorted)
+	if len(names) != len(sorted) {
+		t.Errorf("got %v, want %v (any order)", names, sorted)
+		return
+	}
+	for i := range sorted {
+		if names[i] != sorted[i] {
+			t.Errorf("got %v, want %v (any order)", names, sorted)
+			return
+		}
+	}
+}
+
+// assertHashReply asserts an HGETALL-style flat field/value Array, ignoring
+// pair order (Hash iterates a map).
+func assertHashReply(t *testing.T, got resp.Value, want map[string]string) {
+	t.Helper()
+	if got.Kind != resp.Array {
+		t.Errorf("got %+v, want Array of field/value pairs %v", got, want)
+		return
+	}
+	if len(got.Elems)%2 != 0 {
+		t.Errorf("got odd number of elements %+v, want field/value pairs", got.Elems)
+		return
+	}
+	pairs := map[string]string{}
+	for i := 0; i < len(got.Elems); i += 2 {
+		pairs[got.Elems[i].Str] = got.Elems[i+1].Str
+	}
+	if len(pairs) != len(want) {
+		t.Errorf("got pairs %v, want %v", pairs, want)
+		return
+	}
+	for k, v := range want {
+		if pairs[k] != v {
+			t.Errorf("got pairs %v, want %v", pairs, want)
+			return
+		}
+	}
+}
+
+type zpair struct {
+	member string
+	score  float64
+}
+
+// zsetEntry builds a ZSet entry directly, so ZSCORE/ZRANGE/ZRANK/ZREM can be
+// tested without going through cmdZAdd.
+func zsetEntry(pairs ...zpair) entry {
+	data := ZSetData{members: map[string]float64{}, order: skiplist.New()}
+	for _, p := range pairs {
+		data.members[p.member] = p.score
+		data.order.Insert(p.score, p.member)
+	}
+	return entry{Kind: ZSet, ZSet: data}
+}
+
+// ---------- normalizeRange ----------
+
+func TestNormalizeRange(t *testing.T) {
+	cases := []struct {
+		name                string
+		start, stop, length int
+		wantStart, wantStop int
+		wantOK              bool
+	}{
+		{"in bounds", 1, 3, 5, 1, 3, true},
+		{"full range via -1", 0, -1, 5, 0, 4, true},
+		{"stop past end clamps", 0, 99, 5, 0, 4, true},
+		{"negative start", -2, 4, 5, 3, 4, true},
+		{"both negative", -3, -1, 5, 2, 4, true},
+		{"start below -length clamps to 0", -99, 2, 5, 0, 2, true},
+		{"single element", 2, 2, 5, 2, 2, true},
+		{"crossed", 3, 1, 5, 0, 0, false},
+		{"crossed after normalizing", -1, -3, 5, 0, 0, false},
+		{"start past end", 5, 9, 5, 0, 0, false},
+		{"empty length", 0, -1, 0, 0, 0, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			start, stop, ok := normalizeRange(tc.start, tc.stop, tc.length)
+			if start != tc.wantStart || stop != tc.wantStop || ok != tc.wantOK {
+				t.Errorf("normalizeRange(%d, %d, %d) = (%d, %d, %v), want (%d, %d, %v)",
+					tc.start, tc.stop, tc.length, start, stop, ok, tc.wantStart, tc.wantStop, tc.wantOK)
+			}
+		})
+	}
+}
+
+// ---------- WRONGTYPE in both directions ----------
+
+func TestWrongType(t *testing.T) {
+	store := make(map[string]entry)
+	cmdSet(store, []string{"SET", "str", "v"})
+	cmdRPush(store, []string{"RPUSH", "list", "a"})
+	HSet(store, []string{"HSET", "hash", "f", "v"})
+	cmdSAdd(store, []string{"SADD", "set", "m"})
+	store["zset"] = zsetEntry(zpair{"m", 1})
+
+	cases := []struct {
+		name string
+		fn   func(map[string]entry, []string) resp.Value
+		args []string
+	}{
+		// every non-string command against a String entry
+		{"LPUSH on string", cmdLPush, []string{"LPUSH", "str", "x"}},
+		{"RPUSH on string", cmdRPush, []string{"RPUSH", "str", "x"}},
+		{"LLEN on string", cmdLLen, []string{"LLEN", "str"}},
+		{"LRANGE on string", cmdLRange, []string{"LRANGE", "str", "0", "-1"}},
+		{"LPOP on string", cmdLPop, []string{"LPOP", "str"}},
+		{"RPOP on string", cmdRPop, []string{"RPOP", "str"}},
+		{"HSET on string", HSet, []string{"HSET", "str", "f", "v"}},
+		{"HGET on string", HGet, []string{"HGET", "str", "f"}},
+		{"HDEL on string", HDel, []string{"HDEL", "str", "f"}},
+		{"HGETALL on string", HGetAll, []string{"HGETALL", "str"}},
+		{"SADD on string", cmdSAdd, []string{"SADD", "str", "m"}},
+		{"SREM on string", cmdSRem, []string{"SREM", "str", "m"}},
+		{"SISMEMBER on string", cmdSIsMember, []string{"SISMEMBER", "str", "m"}},
+		{"SMEMBERS on string", cmdSMembers, []string{"SMEMBERS", "str"}},
+		{"SCARD on string", cmdSCard, []string{"SCARD", "str"}},
+		{"ZADD on string", cmdZAdd, []string{"ZADD", "str", "1", "m"}},
+		{"ZSCORE on string", cmdZScore, []string{"ZSCORE", "str", "m"}},
+		{"ZRANGE on string", cmdZRange, []string{"ZRANGE", "str", "0", "-1", "WITHSCORES"}},
+		{"ZRANK on string", cmdZRank, []string{"ZRANK", "str", "m"}},
+		{"ZREM on string", cmdZRem, []string{"ZREM", "str", "m"}},
+		// and string commands against every other entry kind
+		{"GET on list", cmdGet, []string{"GET", "list"}},
+		{"INCR on list", cmdIncr, []string{"INCR", "list"}},
+		{"DECR on list", cmdDecr, []string{"DECR", "list"}},
+		{"GET on hash", cmdGet, []string{"GET", "hash"}},
+		{"GET on set", cmdGet, []string{"GET", "set"}},
+		{"GET on zset", cmdGet, []string{"GET", "zset"}},
+		// and across the non-string types
+		{"LPUSH on hash", cmdLPush, []string{"LPUSH", "hash", "x"}},
+		{"HSET on set", HSet, []string{"HSET", "set", "f", "v"}},
+		{"SADD on zset", cmdSAdd, []string{"SADD", "zset", "m"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assertErrorMsg(t, tc.fn(store, tc.args), wrongTypeErr.Str)
+		})
+	}
+
+	// none of the rejected calls may have clobbered the existing entries
+	assertBulkString(t, cmdGet(store, []string{"GET", "str"}), "v")
+	assertArray(t, cmdLRange(store, []string{"LRANGE", "list", "0", "-1"}), []string{"a"})
+	assertBulkString(t, HGet(store, []string{"HGET", "hash", "f"}), "v")
+	assertInteger(t, cmdSIsMember(store, []string{"SISMEMBER", "set", "m"}), 1)
+}
+
+// ---------- LPUSH / RPUSH ----------
+
+func TestCmdLPushRPush(t *testing.T) {
+	store := make(map[string]entry)
+
+	// LPUSH pushes each value at the head, so the last argument ends up first
+	assertInteger(t, cmdLPush(store, []string{"LPUSH", "l", "a", "b", "c"}), 3)
+	assertArray(t, cmdLRange(store, []string{"LRANGE", "l", "0", "-1"}), []string{"c", "b", "a"})
+
+	// pushing onto an existing list returns the NEW total length
+	assertInteger(t, cmdLPush(store, []string{"LPUSH", "l", "x"}), 4)
+	assertArray(t, cmdLRange(store, []string{"LRANGE", "l", "0", "-1"}), []string{"x", "c", "b", "a"})
+
+	// RPUSH appends in argument order
+	assertInteger(t, cmdRPush(store, []string{"RPUSH", "r", "a", "b", "c"}), 3)
+	assertArray(t, cmdLRange(store, []string{"LRANGE", "r", "0", "-1"}), []string{"a", "b", "c"})
+	assertInteger(t, cmdRPush(store, []string{"RPUSH", "r", "d"}), 4)
+	assertArray(t, cmdLRange(store, []string{"LRANGE", "r", "0", "-1"}), []string{"a", "b", "c", "d"})
+
+	// pushes must preserve an existing TTL
+	cmdExpire(store, []string{"EXPIRE", "l", "100"})
+	cmdLPush(store, []string{"LPUSH", "l", "y"})
+	assertInteger(t, cmdTTL(store, []string{"TTL", "l"}), 100)
+	cmdExpire(store, []string{"EXPIRE", "r", "100"})
+	cmdRPush(store, []string{"RPUSH", "r", "y"})
+	assertInteger(t, cmdTTL(store, []string{"TTL", "r"}), 100)
+
+	// wrong arg counts -> Error
+	assertKind(t, cmdLPush(store, []string{"LPUSH"}), resp.Error)
+	assertKind(t, cmdLPush(store, []string{"LPUSH", "l"}), resp.Error)
+	assertKind(t, cmdRPush(store, []string{"RPUSH"}), resp.Error)
+	assertKind(t, cmdRPush(store, []string{"RPUSH", "r"}), resp.Error)
+}
+
+// ---------- LLEN ----------
+
+func TestCmdLLen(t *testing.T) {
+	store := make(map[string]entry)
+
+	// missing key counts as an empty list
+	assertInteger(t, cmdLLen(store, []string{"LLEN", "missing"}), 0)
+
+	cmdRPush(store, []string{"RPUSH", "l", "a", "b", "c"})
+	assertInteger(t, cmdLLen(store, []string{"LLEN", "l"}), 3)
+
+	// wrong arg counts -> Error
+	assertKind(t, cmdLLen(store, []string{"LLEN"}), resp.Error)
+	assertKind(t, cmdLLen(store, []string{"LLEN", "l", "x"}), resp.Error)
+}
+
+// ---------- LRANGE ----------
+
+func TestCmdLRange(t *testing.T) {
+	store := make(map[string]entry)
+	cmdRPush(store, []string{"RPUSH", "l", "a", "b", "c", "d", "e"})
+
+	assertArray(t, cmdLRange(store, []string{"LRANGE", "l", "0", "-1"}), []string{"a", "b", "c", "d", "e"})
+	assertArray(t, cmdLRange(store, []string{"LRANGE", "l", "1", "3"}), []string{"b", "c", "d"})
+	assertArray(t, cmdLRange(store, []string{"LRANGE", "l", "-2", "-1"}), []string{"d", "e"})
+
+	// stop past the end clamps
+	assertArray(t, cmdLRange(store, []string{"LRANGE", "l", "0", "99"}), []string{"a", "b", "c", "d", "e"})
+
+	// crossed or fully out-of-range indexes -> empty Array, NOT Null
+	assertArray(t, cmdLRange(store, []string{"LRANGE", "l", "3", "1"}), []string{})
+	assertArray(t, cmdLRange(store, []string{"LRANGE", "l", "99", "100"}), []string{})
+
+	// missing key -> empty Array
+	assertArray(t, cmdLRange(store, []string{"LRANGE", "missing", "0", "-1"}), []string{})
+
+	// non-integer index -> Error
+	assertKind(t, cmdLRange(store, []string{"LRANGE", "l", "abc", "-1"}), resp.Error)
+	assertKind(t, cmdLRange(store, []string{"LRANGE", "l", "0", "abc"}), resp.Error)
+
+	// wrong arg counts -> Error
+	assertKind(t, cmdLRange(store, []string{"LRANGE", "l", "0"}), resp.Error)
+	assertKind(t, cmdLRange(store, []string{"LRANGE", "l", "0", "-1", "x"}), resp.Error)
+}
+
+// ---------- LPOP / RPOP ----------
+
+func TestCmdLPopRPop(t *testing.T) {
+	store := make(map[string]entry)
+	cmdRPush(store, []string{"RPUSH", "l", "a", "b", "c", "d", "e"})
+
+	// single pop: LPOP takes the head, RPOP the tail
+	assertBulkString(t, cmdLPop(store, []string{"LPOP", "l"}), "a")
+	assertBulkString(t, cmdRPop(store, []string{"RPOP", "l"}), "e")
+	assertArray(t, cmdLRange(store, []string{"LRANGE", "l", "0", "-1"}), []string{"b", "c", "d"})
+
+	// LPOP with count returns the first n in list order
+	assertArray(t, cmdLPop(store, []string{"LPOP", "l", "2"}), []string{"b", "c"})
+
+	// count larger than the list clamps, and emptying the list deletes the key
+	assertArray(t, cmdRPop(store, []string{"RPOP", "l", "5"}), []string{"d"})
+	assertInteger(t, cmdExists(store, []string{"EXISTS", "l"}), 0)
+
+	// RPOP with count returns items in pop order: tail first
+	cmdRPush(store, []string{"RPUSH", "r", "a", "b", "c"})
+	assertArray(t, cmdRPop(store, []string{"RPOP", "r", "2"}), []string{"c", "b"})
+	assertArray(t, cmdLRange(store, []string{"LRANGE", "r", "0", "-1"}), []string{"a"})
+
+	// a single pop of the last element also deletes the key
+	assertBulkString(t, cmdLPop(store, []string{"LPOP", "r"}), "a")
+	assertInteger(t, cmdExists(store, []string{"EXISTS", "r"}), 0)
+
+	// missing key -> Null in both forms
+	assertKind(t, cmdLPop(store, []string{"LPOP", "missing"}), resp.Null)
+	assertKind(t, cmdRPop(store, []string{"RPOP", "missing"}), resp.Null)
+	assertKind(t, cmdLPop(store, []string{"LPOP", "missing", "2"}), resp.Null)
+
+	// zero, negative, or non-integer counts -> Error
+	cmdRPush(store, []string{"RPUSH", "b", "x", "y"})
+	assertKind(t, cmdLPop(store, []string{"LPOP", "b", "0"}), resp.Error)
+	assertKind(t, cmdRPop(store, []string{"RPOP", "b", "-1"}), resp.Error)
+	assertKind(t, cmdLPop(store, []string{"LPOP", "b", "abc"}), resp.Error)
+
+	// wrong arg counts -> Error
+	assertKind(t, cmdLPop(store, []string{"LPOP"}), resp.Error)
+	assertKind(t, cmdRPop(store, []string{"RPOP", "b", "1", "x"}), resp.Error)
+}
+
+// ---------- HSET / HGET ----------
+
+func TestHSet(t *testing.T) {
+	store := make(map[string]entry)
+
+	// counts only newly created fields
+	assertInteger(t, HSet(store, []string{"HSET", "h", "f1", "v1", "f2", "v2"}), 2)
+	assertInteger(t, HSet(store, []string{"HSET", "h", "f1", "changed"}), 0)
+	assertBulkString(t, HGet(store, []string{"HGET", "h", "f1"}), "changed")
+
+	// mixed new and overwrite in one call
+	assertInteger(t, HSet(store, []string{"HSET", "h", "f1", "again", "f3", "v3"}), 1)
+	assertBulkString(t, HGet(store, []string{"HGET", "h", "f3"}), "v3")
+
+	// same field twice in one call: created once, last value wins
+	assertInteger(t, HSet(store, []string{"HSET", "h2", "f", "a", "f", "b"}), 1)
+	assertBulkString(t, HGet(store, []string{"HGET", "h2", "f"}), "b")
+
+	// HSET must preserve an existing TTL
+	cmdExpire(store, []string{"EXPIRE", "h", "100"})
+	HSet(store, []string{"HSET", "h", "f4", "v4"})
+	assertInteger(t, cmdTTL(store, []string{"TTL", "h"}), 100)
+
+	// dangling field name or too few args -> Error
+	assertKind(t, HSet(store, []string{"HSET", "h", "f1", "v1", "f2"}), resp.Error)
+	assertKind(t, HSet(store, []string{"HSET", "h", "f1"}), resp.Error)
+	assertKind(t, HSet(store, []string{"HSET", "h"}), resp.Error)
+}
+
+func TestHGet(t *testing.T) {
+	store := make(map[string]entry)
+	HSet(store, []string{"HSET", "h", "f", "v"})
+
+	assertBulkString(t, HGet(store, []string{"HGET", "h", "f"}), "v")
+
+	// missing field and missing key both -> Null
+	assertKind(t, HGet(store, []string{"HGET", "h", "missing"}), resp.Null)
+	assertKind(t, HGet(store, []string{"HGET", "missing", "f"}), resp.Null)
+
+	// wrong arg counts -> Error
+	assertKind(t, HGet(store, []string{"HGET", "h"}), resp.Error)
+	assertKind(t, HGet(store, []string{"HGET", "h", "f", "x"}), resp.Error)
+}
+
+// ---------- HDEL / HGETALL ----------
+
+func TestHDel(t *testing.T) {
+	store := make(map[string]entry)
+	HSet(store, []string{"HSET", "h", "f1", "v1", "f2", "v2", "f3", "v3"})
+
+	// counts only fields that existed
+	assertInteger(t, HDel(store, []string{"HDEL", "h", "f1", "missing"}), 1)
+	assertKind(t, HGet(store, []string{"HGET", "h", "f1"}), resp.Null)
+
+	// deleting the last field removes the key entirely
+	assertInteger(t, HDel(store, []string{"HDEL", "h", "f2", "f3"}), 2)
+	assertInteger(t, cmdExists(store, []string{"EXISTS", "h"}), 0)
+
+	// missing key -> 0
+	assertInteger(t, HDel(store, []string{"HDEL", "missing", "f"}), 0)
+
+	// wrong arg counts -> Error
+	assertKind(t, HDel(store, []string{"HDEL", "h"}), resp.Error)
+	assertKind(t, HDel(store, []string{"HDEL"}), resp.Error)
+}
+
+func TestHGetAll(t *testing.T) {
+	store := make(map[string]entry)
+	HSet(store, []string{"HSET", "h", "f1", "v1", "f2", "v2"})
+
+	assertHashReply(t, HGetAll(store, []string{"HGETALL", "h"}), map[string]string{"f1": "v1", "f2": "v2"})
+
+	// missing key -> empty Array, NOT Null
+	assertArray(t, HGetAll(store, []string{"HGETALL", "missing"}), []string{})
+
+	// wrong arg counts -> Error
+	assertKind(t, HGetAll(store, []string{"HGETALL"}), resp.Error)
+	assertKind(t, HGetAll(store, []string{"HGETALL", "h", "x"}), resp.Error)
+}
+
+// ---------- SADD / SREM / SISMEMBER / SMEMBERS / SCARD ----------
+
+func TestCmdSAdd(t *testing.T) {
+	store := make(map[string]entry)
+
+	// counts only genuinely new members
+	assertInteger(t, cmdSAdd(store, []string{"SADD", "s", "a", "b", "c"}), 3)
+	assertInteger(t, cmdSAdd(store, []string{"SADD", "s", "a", "d"}), 1)
+	assertInteger(t, cmdSAdd(store, []string{"SADD", "s", "a", "b"}), 0)
+	assertInteger(t, cmdSCard(store, []string{"SCARD", "s"}), 4)
+
+	// duplicates within a single call count once
+	assertInteger(t, cmdSAdd(store, []string{"SADD", "s2", "x", "x"}), 1)
+	assertInteger(t, cmdSCard(store, []string{"SCARD", "s2"}), 1)
+
+	// wrong arg counts -> Error
+	assertKind(t, cmdSAdd(store, []string{"SADD", "s"}), resp.Error)
+	assertKind(t, cmdSAdd(store, []string{"SADD"}), resp.Error)
+}
+
+func TestCmdSRem(t *testing.T) {
+	store := make(map[string]entry)
+	cmdSAdd(store, []string{"SADD", "s", "a", "b", "c"})
+
+	// counts only members that existed
+	assertInteger(t, cmdSRem(store, []string{"SREM", "s", "a", "missing"}), 1)
+	assertInteger(t, cmdSIsMember(store, []string{"SISMEMBER", "s", "a"}), 0)
+
+	// removing the last members deletes the key entirely
+	assertInteger(t, cmdSRem(store, []string{"SREM", "s", "b", "c"}), 2)
+	assertInteger(t, cmdExists(store, []string{"EXISTS", "s"}), 0)
+
+	// missing key -> 0
+	assertInteger(t, cmdSRem(store, []string{"SREM", "missing", "a"}), 0)
+
+	// wrong arg counts -> Error
+	assertKind(t, cmdSRem(store, []string{"SREM", "s"}), resp.Error)
+	assertKind(t, cmdSRem(store, []string{"SREM"}), resp.Error)
+}
+
+func TestCmdSIsMemberSMembersSCard(t *testing.T) {
+	store := make(map[string]entry)
+	cmdSAdd(store, []string{"SADD", "s", "a", "b", "c"})
+
+	assertInteger(t, cmdSIsMember(store, []string{"SISMEMBER", "s", "a"}), 1)
+	assertInteger(t, cmdSIsMember(store, []string{"SISMEMBER", "s", "zz"}), 0)
+	assertInteger(t, cmdSIsMember(store, []string{"SISMEMBER", "missing", "a"}), 0)
+
+	assertArrayUnordered(t, cmdSMembers(store, []string{"SMEMBERS", "s"}), []string{"a", "b", "c"})
+	assertArray(t, cmdSMembers(store, []string{"SMEMBERS", "missing"}), []string{})
+
+	assertInteger(t, cmdSCard(store, []string{"SCARD", "s"}), 3)
+	assertInteger(t, cmdSCard(store, []string{"SCARD", "missing"}), 0)
+
+	// wrong arg counts -> Error
+	assertKind(t, cmdSIsMember(store, []string{"SISMEMBER", "s"}), resp.Error)
+	assertKind(t, cmdSMembers(store, []string{"SMEMBERS"}), resp.Error)
+	assertKind(t, cmdSCard(store, []string{"SCARD", "s", "x"}), resp.Error)
+}
+
+// ---------- ZSCORE ----------
+
+func TestCmdZScore(t *testing.T) {
+	store := make(map[string]entry)
+	store["z"] = zsetEntry(zpair{"a", 1.5}, zpair{"b", 2})
+
+	// scores come back as bulk strings; whole numbers have no trailing ".0"
+	assertBulkString(t, cmdZScore(store, []string{"ZSCORE", "z", "a"}), "1.5")
+	assertBulkString(t, cmdZScore(store, []string{"ZSCORE", "z", "b"}), "2")
+
+	// missing member and missing key both -> Null
+	assertKind(t, cmdZScore(store, []string{"ZSCORE", "z", "missing"}), resp.Null)
+	assertKind(t, cmdZScore(store, []string{"ZSCORE", "missing", "a"}), resp.Null)
+
+	// wrong arg counts -> Error
+	assertKind(t, cmdZScore(store, []string{"ZSCORE", "z"}), resp.Error)
+	assertKind(t, cmdZScore(store, []string{"ZSCORE", "z", "a", "x"}), resp.Error)
+}
+
+// ---------- ZRANGE ----------
+
+func TestCmdZRange(t *testing.T) {
+	store := make(map[string]entry)
+	store["z"] = zsetEntry(zpair{"a", 1}, zpair{"b", 2}, zpair{"c", 3})
+
+	// the plain form (no WITHSCORES) is valid ZRANGE
+	assertArray(t, cmdZRange(store, []string{"ZRANGE", "z", "0", "-1"}), []string{"a", "b", "c"})
+	assertArray(t, cmdZRange(store, []string{"ZRANGE", "z", "1", "2"}), []string{"b", "c"})
+
+	// WITHSCORES interleaves member, score
+	assertArray(t, cmdZRange(store, []string{"ZRANGE", "z", "0", "-1", "WITHSCORES"}),
+		[]string{"a", "1", "b", "2", "c", "3"})
+
+	// negative indexes
+	assertArray(t, cmdZRange(store, []string{"ZRANGE", "z", "-2", "-1", "WITHSCORES"}),
+		[]string{"b", "2", "c", "3"})
+
+	// tied scores order lexicographically by member, regardless of insert order
+	store["tied"] = zsetEntry(zpair{"b", 1}, zpair{"a", 1}, zpair{"c", 1})
+	assertArray(t, cmdZRange(store, []string{"ZRANGE", "tied", "0", "-1", "WITHSCORES"}),
+		[]string{"a", "1", "b", "1", "c", "1"})
+
+	// out-of-range or crossed indexes -> empty Array, NOT Null
+	assertArray(t, cmdZRange(store, []string{"ZRANGE", "z", "5", "9", "WITHSCORES"}), []string{})
+	assertArray(t, cmdZRange(store, []string{"ZRANGE", "z", "2", "1", "WITHSCORES"}), []string{})
+
+	// missing key -> empty Array
+	assertArray(t, cmdZRange(store, []string{"ZRANGE", "missing", "0", "-1", "WITHSCORES"}), []string{})
+
+	// non-integer index -> Error
+	assertKind(t, cmdZRange(store, []string{"ZRANGE", "z", "abc", "-1", "WITHSCORES"}), resp.Error)
+	assertKind(t, cmdZRange(store, []string{"ZRANGE", "z", "0", "abc", "WITHSCORES"}), resp.Error)
+
+	// a 5th arg that isn't WITHSCORES -> Error
+	assertKind(t, cmdZRange(store, []string{"ZRANGE", "z", "0", "-1", "BOGUS"}), resp.Error)
+
+	// wrong arg counts -> Error
+	assertKind(t, cmdZRange(store, []string{"ZRANGE", "z", "0"}), resp.Error)
+	assertKind(t, cmdZRange(store, []string{"ZRANGE", "z", "0", "-1", "WITHSCORES", "x"}), resp.Error)
+}
+
+// ---------- ZRANK ----------
+
+func TestCmdZRank(t *testing.T) {
+	store := make(map[string]entry)
+	store["z"] = zsetEntry(zpair{"a", 1}, zpair{"c", 2}, zpair{"b", 2})
+
+	// rank is 0-based, ordered by score then member
+	assertInteger(t, cmdZRank(store, []string{"ZRANK", "z", "a"}), 0)
+	assertInteger(t, cmdZRank(store, []string{"ZRANK", "z", "b"}), 1)
+	assertInteger(t, cmdZRank(store, []string{"ZRANK", "z", "c"}), 2)
+
+	// missing member and missing key both -> Null
+	assertKind(t, cmdZRank(store, []string{"ZRANK", "z", "missing"}), resp.Null)
+	assertKind(t, cmdZRank(store, []string{"ZRANK", "missing", "a"}), resp.Null)
+
+	// wrong arg counts -> Error
+	assertKind(t, cmdZRank(store, []string{"ZRANK", "z"}), resp.Error)
+	assertKind(t, cmdZRank(store, []string{"ZRANK", "z", "a", "x"}), resp.Error)
+}
+
+// ---------- ZREM ----------
+
+func TestCmdZRem(t *testing.T) {
+	store := make(map[string]entry)
+	store["z"] = zsetEntry(zpair{"a", 1}, zpair{"b", 2}, zpair{"c", 3})
+
+	// counts only members that existed, and both views agree afterward
+	assertInteger(t, cmdZRem(store, []string{"ZREM", "z", "b", "missing"}), 1)
+	assertKind(t, cmdZScore(store, []string{"ZSCORE", "z", "b"}), resp.Null)
+	assertArray(t, cmdZRange(store, []string{"ZRANGE", "z", "0", "-1", "WITHSCORES"}),
+		[]string{"a", "1", "c", "3"})
+	assertInteger(t, cmdZRank(store, []string{"ZRANK", "z", "c"}), 1)
+
+	// removing the last members deletes the key entirely
+	assertInteger(t, cmdZRem(store, []string{"ZREM", "z", "a", "c"}), 2)
+	assertInteger(t, cmdExists(store, []string{"EXISTS", "z"}), 0)
+
+	// missing key -> 0
+	assertInteger(t, cmdZRem(store, []string{"ZREM", "missing", "a"}), 0)
+
+	// wrong arg counts -> Error
+	assertKind(t, cmdZRem(store, []string{"ZREM", "z"}), resp.Error)
+	assertKind(t, cmdZRem(store, []string{"ZREM"}), resp.Error)
+}
+
+// ---------- ZADD ----------
+// NOTE: keep this test LAST in the file. cmdZAdd currently panics, and a panic
+// aborts the whole test binary; declared last, every other test reports first.
+
+func TestCmdZAdd(t *testing.T) {
+	store := make(map[string]entry)
+
+	// a new member returns 1 and is immediately visible to ZSCORE
+	assertInteger(t, cmdZAdd(store, []string{"ZADD", "z", "1", "a"}), 1)
+	assertBulkString(t, cmdZScore(store, []string{"ZSCORE", "z", "a"}), "1")
+
+	// multiple score/member pairs in one call
+	assertInteger(t, cmdZAdd(store, []string{"ZADD", "z", "2", "b", "3", "c"}), 2)
+	assertArray(t, cmdZRange(store, []string{"ZRANGE", "z", "0", "-1", "WITHSCORES"}),
+		[]string{"a", "1", "b", "2", "c", "3"})
+
+	// re-scoring an existing member returns 0, and BOTH views agree: the map
+	// has the new score and the skip list holds the member exactly once, at
+	// its new position
+	assertInteger(t, cmdZAdd(store, []string{"ZADD", "z", "5", "a"}), 0)
+	assertBulkString(t, cmdZScore(store, []string{"ZSCORE", "z", "a"}), "5")
+	assertArray(t, cmdZRange(store, []string{"ZRANGE", "z", "0", "-1", "WITHSCORES"}),
+		[]string{"b", "2", "c", "3", "a", "5"})
+	assertInteger(t, cmdZRank(store, []string{"ZRANK", "z", "a"}), 2)
+
+	// non-numeric score -> the canonical error
+	assertErrorMsg(t, cmdZAdd(store, []string{"ZADD", "z", "abc", "m"}), "ERR value is not a valid float")
+
+	// dangling score with no member -> Error
+	assertKind(t, cmdZAdd(store, []string{"ZADD", "z", "1", "a", "2"}), resp.Error)
+
+	// wrong arg counts -> Error
+	assertKind(t, cmdZAdd(store, []string{"ZADD", "z", "1"}), resp.Error)
+	assertKind(t, cmdZAdd(store, []string{"ZADD", "z"}), resp.Error)
 }

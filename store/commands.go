@@ -662,12 +662,12 @@ func cmdZAdd(store map[string]entry, args []string) resp.Value {
 			return wrongTypeErr
 		}
 		pairs := (len(args) - 2) / 2
-		scores := make([]float64, 0, pairs)
+		scores := make([]float64, pairs)
 		score_idx := 2
 		for i := range pairs {
 			score, err := strconv.ParseFloat(args[score_idx], 64)
 			if err != nil {
-				return resp.NewError("ERR value is not a valid floa")
+				return resp.NewError("ERR value is not a valid float")
 			}
 			scores[i] = score
 			score_idx += 2
@@ -675,18 +675,20 @@ func cmdZAdd(store map[string]entry, args []string) resp.Value {
 		member_idx := 3
 		inserted := 0
 		for i := range pairs {
-			_, ok := ent.ZSet.members[args[member_idx]]
+			cur_score, ok := ent.ZSet.members[args[member_idx]]
 			if !ok {
 				ent.ZSet.members[args[member_idx]] = scores[i]
 				ent.ZSet.order.Insert(scores[i], args[member_idx])
 				inserted += 1
+				member_idx += 2
 				continue
 			}
 			ent.ZSet.members[args[member_idx]] = scores[i]
-			ent.ZSet.order.Delete(scores[i], args[member_idx])
+			ent.ZSet.order.Delete(cur_score, args[member_idx])
 			ent.ZSet.order.Insert(scores[i], args[member_idx])
+			member_idx += 2
 		}
-
+		store[args[1]] = ent
 		return resp.NewInteger(int64(inserted))
 	}
 	return resp.NewError("ERR wrong number of arguments for 'ZADD' command")
@@ -712,13 +714,13 @@ func cmdZScore(store map[string]entry, args []string) resp.Value {
 
 func cmdZRange(store map[string]entry, args []string) resp.Value {
 	if len(args) >= 4 && len(args) < 6 {
-		withScores := false	
+		withScores := false
 		if len(args) == 5 && strings.ToUpper(args[4]) == "WITHSCORES" {
 			withScores = true
-		} else {
+		}
+		if len(args) == 5 && strings.ToUpper(args[4]) != "WITHSCORES" {
 			return resp.NewError("ERR syntax error")
 		}
-
 		ent, ok := lookup(store, args[1])
 		if !ok {
 			return resp.Value{Kind: resp.Array}
@@ -729,12 +731,12 @@ func cmdZRange(store map[string]entry, args []string) resp.Value {
 
 		start, err := strconv.Atoi(args[2])
 		if err != nil {
-			return resp.Value{Kind: resp.Array}
+			return resp.NewError("ERR value is not an integer or out of range")
 		}
 
 		stop, err := strconv.Atoi(args[3])
 		if err != nil {
-			return resp.Value{Kind: resp.Array}
+			return resp.NewError("ERR value is not an integer or out of range")
 		}
 
 		nodes, ok := ent.ZSet.order.GetRange(start, stop)
@@ -760,6 +762,9 @@ func cmdZRank(store map[string]entry, args []string) resp.Value {
 		if !ok {
 			return resp.Value{Kind: resp.Null}
 		}
+		if ent.Kind != ZSet {
+			return wrongTypeErr
+		}
 		score, ok := ent.ZSet.members[args[2]]
 		if !ok {
 			return resp.Value{Kind: resp.Null}
@@ -777,7 +782,7 @@ func cmdZRem(store map[string]entry, args []string) resp.Value {
 			return resp.NewInteger(0)
 		}
 		if ent.Kind != ZSet {
-			return resp.NewInteger(0)
+			return wrongTypeErr
 		}
 		deleted := 0
 		for i := 2; i < len(args); i++ {
@@ -788,6 +793,9 @@ func cmdZRem(store map[string]entry, args []string) resp.Value {
 			ent.ZSet.order.Delete(score, args[i])
 			delete(ent.ZSet.members, args[i])
 			deleted += 1
+		}
+		if len(ent.ZSet.members) == 0 {
+			delete(store, args[1])
 		}
 		return resp.NewInteger(int64(deleted))
 	}
