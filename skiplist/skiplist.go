@@ -134,11 +134,11 @@ func (sl *SkipList) Insert(score float64, member string) {
 	sl.numNodes += 1
 }
 
-func (sl *SkipList) Delete(score float64, member string) {
+func (sl *SkipList) Delete(score float64, member string) bool {
 	prevNodes, _ := sl.Search(score, member)
 	curNode := prevNodes[0].next[0]
 	if curNode == nil || (curNode.member != member || curNode.score != score) {
-		return
+		return false
 	}
 
 	for i := 0; i < len(curNode.next); i++ {
@@ -157,7 +157,7 @@ func (sl *SkipList) Delete(score float64, member string) {
 		sl.level -= 1
 	}
 	sl.numNodes -= 1
-	return
+	return true
 }
 
 func (sl *SkipList) Rank(score float64, member string) int64 {
