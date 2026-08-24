@@ -21,8 +21,8 @@ type SkipList struct {
 }
 
 type nodeData struct {
-	score  float64
-	member string
+	Score  float64
+	Member string
 }
 
 func randomLevel() int {
@@ -134,11 +134,11 @@ func (sl *SkipList) Insert(score float64, member string) {
 	sl.numNodes += 1
 }
 
-func (sl *SkipList) Delete(score float64, member string) bool {
+func (sl *SkipList) Delete(score float64, member string) {
 	prevNodes, _ := sl.Search(score, member)
 	curNode := prevNodes[0].next[0]
 	if curNode == nil || (curNode.member != member || curNode.score != score) {
-		return false
+		return
 	}
 
 	for i := 0; i < len(curNode.next); i++ {
@@ -157,7 +157,7 @@ func (sl *SkipList) Delete(score float64, member string) bool {
 		sl.level -= 1
 	}
 	sl.numNodes -= 1
-	return true
+	return
 }
 
 func (sl *SkipList) Rank(score float64, member string) int64 {
@@ -178,8 +178,8 @@ func (sl *SkipList) GetRange(start, stop int) ([]nodeData, bool) {
 	count := 1 + (stop - start)
 	nodes := make([]nodeData, 0, count)
 
-	for i := 0; i < count; i++ {
-		nodes = append(nodes, nodeData{score: curNode.score, member: curNode.member})
+	for range count {
+		nodes = append(nodes, nodeData{Score: curNode.score, Member: curNode.member})
 		if curNode.next[0] == nil {
 			break
 		}
