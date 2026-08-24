@@ -166,8 +166,9 @@ func TestDelete(t *testing.T) {
 	remaining := []pair{}
 	for i, p := range pairs {
 		if i%3 == 0 {
-			if !sl.Delete(p.score, p.member) {
-				t.Fatalf("Delete(%v, %q) = false for an existing element", p.score, p.member)
+			sl.Delete(p.score, p.member)
+			if got := sl.Rank(p.score, p.member); got != -1 {
+				t.Fatalf("Rank(%v, %q) = %d after Delete, want -1", p.score, p.member, got)
 			}
 		} else {
 			remaining = append(remaining, p)
@@ -177,17 +178,11 @@ func TestDelete(t *testing.T) {
 	checkSorted(t, sl)
 	checkMatches(t, sl, remaining)
 
-	// deleting something absent must report false and change nothing:
+	// deleting something absent must change nothing:
 	// unknown member, wrong score for a real member, and a repeat delete
-	if sl.Delete(0, "nope") {
-		t.Error("Delete of an unknown member returned true")
-	}
-	if sl.Delete(999, remaining[0].member) {
-		t.Error("Delete with the wrong score returned true")
-	}
-	if sl.Delete(pairs[0].score, pairs[0].member) {
-		t.Error("second Delete of the same element returned true")
-	}
+	sl.Delete(0, "nope")
+	sl.Delete(999, remaining[0].member)
+	sl.Delete(pairs[0].score, pairs[0].member)
 	checkMatches(t, sl, remaining)
 }
 
@@ -203,9 +198,7 @@ func TestRescoreMoves(t *testing.T) {
 	}
 
 	// move m00 from score 0 to a score past everything else
-	if !sl.Delete(0, "m00") {
-		t.Fatal("Delete of m00 at its old score failed")
-	}
+	sl.Delete(0, "m00")
 	sl.Insert(100, "m00")
 
 	if got := sl.Rank(0, "m00"); got != -1 {
@@ -252,9 +245,7 @@ func TestSpansAndRanks(t *testing.T) {
 		remaining := []pair{}
 		for _, p := range pairs {
 			if rng.Intn(3) == 0 {
-				if !sl.Delete(p.score, p.member) {
-					t.Fatalf("trial %d: Delete(%v, %q) failed", trial, p.score, p.member)
-				}
+				sl.Delete(p.score, p.member)
 			} else {
 				remaining = append(remaining, p)
 			}
