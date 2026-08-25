@@ -2,6 +2,7 @@ package resp
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -25,6 +26,36 @@ type Value struct {
 	Num int64
 	Elems []Value
 }
+
+func Command(args []string) Value {
+	elems := make([]Value, len(args))
+	for i, arg := range args {
+		elems[i] = Value{Kind: BulkString, Str: arg}	
+	}
+	return Value{Kind: Array, Elems: elems}
+}
+
+func (v Value) Args() ([]string, error) {
+	if v.Kind != Array {
+		err := errors.New("ERR request should be of type Array")
+		return nil, err
+	}
+	if len(v.Elems) < 1 {
+		err := errors.New("ERR zero arguments")
+		return nil, err
+	}
+	args := []string{}
+	for _, elem := range v.Elems {
+		if elem.Kind != BulkString {
+			err := errors.New("ERR array elements should be of type BulkString")
+			return nil, err
+		}
+		args = append(args, elem.Str)
+	}
+
+	return args, nil
+}
+
 
 func NewInteger(num int64) Value {
 	return Value{Kind: Integer, Num: num}

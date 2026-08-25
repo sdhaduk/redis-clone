@@ -47,36 +47,20 @@ func handleConnection(conn net.Conn, requests chan store.Message) {
 			_, err = conn.Write(response.Encode())
 			if err != nil {
 				log.Println("Server write error:", err)
-			}
-			return
-		}
-		if val.Kind != resp.Array {
-			response := resp.Value{Kind: resp.Error, Str: "ERR request should be of type Array"}
-			_, err := conn.Write(response.Encode())
-			if err != nil {
-				log.Println("Server write error:", err)
-			}
-			return
-		}
-		if len(val.Elems) < 1 {
-			response := resp.Value{Kind: resp.Error, Str: "ERR zero arguments"}
-			_, err := conn.Write(response.Encode())
-			if err != nil {
-				log.Println("Server write error:", err)
-			}
-			return
-		}
-		args := []string{}
-		for _, elem := range val.Elems {
-			if elem.Kind != resp.BulkString {
-				response := resp.Value{Kind: resp.Error, Str: "ERR array elements should be of type BulkString"}
-				_, err := conn.Write(response.Encode())
-				if err != nil {
-					log.Println("Server write error:", err)
-				}
 				return
 			}
-			args = append(args, elem.Str)
+			continue
+		}
+		
+		args, err := val.Args()
+		if err != nil {
+			response := resp.Value{Kind: resp.Error, Str: err.Error()}
+			_, err := conn.Write(response.Encode())
+			if err != nil {
+				log.Println("Server write error:", err)
+				return
+			}
+			continue
 		}
 
 		if strings.ToUpper(args[0]) == "PING" {
