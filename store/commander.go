@@ -7,6 +7,63 @@ import (
 	"time"
 )
 
+func dispatch(store map[string]entry, args []string) resp.Value {
+	switch strings.ToUpper(args[0]) {
+	case "SET":
+		return cmdSet(store,args)
+	case "GET":
+		return cmdGet(store, args)
+	case "EXPIRE":
+		return cmdExpire(store, args)
+	case "TTL":
+		return cmdTTL(store, args)
+	case "DEL":
+		return cmdDel(store, args)
+	case "EXISTS":
+		return cmdExists(store, args)
+	case "KEYS":
+		return cmdKeys(store, args)
+	case "INCR":
+		return cmdIncr(store, args)
+	case "DECR":
+		return cmdDecr(store, args)
+	case "LPUSH":
+		return cmdLPush(store, args)
+	case "RPUSH":
+		return cmdRPush(store, args)
+	case "LLEN":
+		return cmdLLen(store, args)
+	case "LRANGE":
+		return cmdLRange(store, args)
+	case "RPOP":
+		return cmdRPop(store, args)
+	case "LPOP":
+		return cmdLPop(store, args)
+	case "SADD":
+		return cmdSAdd(store, args)
+	case "SREM":
+		return cmdSRem(store, args)
+	case "SISMEMBER":
+		return cmdSIsMember(store, args)
+	case "SMEMBERS":
+		return cmdSMembers(store, args)
+	case "SCARD":
+		return cmdSCard(store, args)
+	case "ZADD":
+		return cmdZAdd(store, args)
+	case "ZSCORE":
+		return cmdZScore(store, args)
+	case "ZRANGE":
+		return cmdZRange(store, args)
+	case "ZRANK":
+		return cmdZRank(store, args)
+	case "ZREM":
+		return cmdZRem(store, args)
+	default:
+		return resp.NewError("ERR unknown command name")
+	}
+}
+
 func RunCommander(requests chan Message) {
 	store := make(map[string]entry)
 	ticker := time.NewTicker(time.Millisecond * time.Duration(100))
@@ -18,85 +75,7 @@ func RunCommander(requests chan Message) {
 			if !ok {
 				return
 			}
-			switch strings.ToUpper(msg.Args[0]) {
-			case "SET":
-				msg.Reply <- cmdSet(store, msg.Args)
-
-			case "GET":
-				msg.Reply <- cmdGet(store, msg.Args)
-
-			case "EXPIRE":
-				msg.Reply <- cmdExpire(store, msg.Args)
-
-			case "TTL":
-				msg.Reply <- cmdTTL(store, msg.Args)
-
-			case "DEL":
-				msg.Reply <- cmdDel(store, msg.Args)
-
-			case "EXISTS":
-				msg.Reply <- cmdExists(store, msg.Args)
-
-			case "KEYS":
-				msg.Reply <- cmdKeys(store, msg.Args)
-
-			case "INCR":
-				msg.Reply <- cmdIncr(store, msg.Args)
-
-			case "DECR":
-				msg.Reply <- cmdDecr(store, msg.Args)
-
-			case "LPUSH":
-				msg.Reply <- cmdLPush(store, msg.Args)
-
-			case "RPUSH":
-				msg.Reply <- cmdRPush(store, msg.Args)
-
-			case "LLEN":
-				msg.Reply <- cmdLLen(store, msg.Args)
-
-			case "LRANGE":
-				msg.Reply <- cmdLRange(store, msg.Args)
-
-			case "RPOP":
-				msg.Reply <- cmdRPop(store, msg.Args)
-
-			case "LPOP":
-				msg.Reply <- cmdLPop(store, msg.Args)
-
-			case "SADD":
-				msg.Reply <- cmdSAdd(store, msg.Args)
-
-			case "SREM":
-				msg.Reply <- cmdSRem(store, msg.Args)
-
-			case "SISMEMBER":
-				msg.Reply <- cmdSIsMember(store, msg.Args)
-
-			case "SMEMBERS":
-				msg.Reply <- cmdSMembers(store, msg.Args)
-
-			case "SCARD":
-				msg.Reply <- cmdSCard(store, msg.Args)
-
-			case "ZADD":
-				msg.Reply <- cmdZAdd(store, msg.Args)
-
-			case "ZSCORE":
-				msg.Reply <- cmdZScore(store, msg.Args)
-
-			case "ZRANGE":
-				msg.Reply <- cmdZRange(store, msg.Args)
-
-			case "ZRANK":
-				msg.Reply <- cmdZRank(store, msg.Args)
-
-			case "ZREM":
-				msg.Reply <- cmdZRem(store, msg.Args)
-
-			default:
-				msg.Reply <- resp.NewError("ERR unknown command name")
-			}
+			msg.Reply <- dispatch(store, msg.Args)
 
 		case <-ticker.C:
 			sweep(store)
