@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -12,15 +13,35 @@ import (
 )
 
 func main() {
+	var appendOnly bool
+	var appendFSync string
+	var path string = "./appendonly.aof"
+	var aof *store.AOF
+
+	flag.BoolVar(&appendOnly, "appendonly", false, "keep an AOF")
+	flag.StringVar(&appendFSync, "appendfsync", "everysec", "level of consistency")
+	flag.Parse()
+
+	policy, err := store.ParsePolicy(appendFSync)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if appendOnly {
+		aof, err = store.NewAOF(path, policy)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+
 	listener, err := net.Listen("tcp", ":6379")
 	if err != nil {
 		log.Fatal("Error starting server:", err)
 	}
-
 	defer listener.Close()
 
 	requests := make(chan store.Message)
-	go store.RunCommander(requests)
+	go store.RunCommander(requests, aof)
 
 	for {
 		conn, err := listener.Accept()
