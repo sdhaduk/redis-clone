@@ -458,7 +458,7 @@ func cmdLPop(store map[string]entry, args []string) resp.Value {
 	return resp.NewError("ERR wrong number of arguments for 'LPOP' command")
 }
 
-func HSet(store map[string]entry, args []string) resp.Value {
+func cmdHSet(store map[string]entry, args []string) resp.Value {
 	if len(args) >= 4 {
 		if len(args)%2 != 0 {
 			return resp.NewError("ERR number of arguments for 'HSET' command must be even")
@@ -486,7 +486,7 @@ func HSet(store map[string]entry, args []string) resp.Value {
 	return resp.NewError("ERR wrong number of arguments for 'HSET' command")
 }
 
-func HGet(store map[string]entry, args []string) resp.Value {
+func cmdHGet(store map[string]entry, args []string) resp.Value {
 	if len(args) == 3 {
 		ent, ok := lookup(store, args[1])
 		if !ok {
@@ -504,7 +504,7 @@ func HGet(store map[string]entry, args []string) resp.Value {
 	return resp.NewError("ERR wrong number of arguments for 'HGET' command")
 }
 
-func HDel(store map[string]entry, args []string) resp.Value {
+func cmdHDel(store map[string]entry, args []string) resp.Value {
 	if len(args) >= 3 {
 		ent, ok := lookup(store, args[1])
 		if !ok {
@@ -530,7 +530,7 @@ func HDel(store map[string]entry, args []string) resp.Value {
 	return resp.NewError("ERR wrong number of arguments for 'HDEL' command")
 }
 
-func HGetAll(store map[string]entry, args []string) resp.Value {
+func cmdHGetAll(store map[string]entry, args []string) resp.Value {
 	if len(args) == 2 {
 		ent, ok := lookup(store, args[1])
 		if !ok {
@@ -800,5 +800,27 @@ func cmdZRem(store map[string]entry, args []string) resp.Value {
 		return resp.NewInteger(int64(deleted))
 	}
 	return resp.NewError("ERR wrong number of arguments for 'ZREM' command")
+}
+
+func cmdPExpireAt(store map[string]entry, args []string) resp.Value {
+	if len(args) == 3 {
+		time_stamp, err := strconv.ParseInt(args[2], 10, 64)
+		if err != nil {
+			return resp.NewError("ERR value is not an integer or out of range")
+		}
+		ent, ok := lookup(store, args[1])
+		if !ok {
+			return resp.NewInteger(0)
+		}
+		deadline := time.UnixMilli(time_stamp)
+		if time.Now().After(deadline) {
+			delete(store, args[1])
+			return resp.NewInteger(1)
+		}
+		ent.expiresAt = deadline
+		store[args[1]] = ent
+		return resp.NewInteger(1)
+	}
+	return resp.NewError("ERR wrong number of arguments for 'PEXPIREAT' command")
 }
 
