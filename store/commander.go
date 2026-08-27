@@ -1,11 +1,39 @@
 package store
 
 import (
+	"log"
 	"redis-clone/resp"
+	"strconv"
 
 	"strings"
 	"time"
 )
+
+func logForm(store map[string]entry, args []string) [][]string {
+	cmds := [][]string{}
+	cmd := strings.ToUpper(args[0])
+	if cmd == "EXPIRE" {
+		ent, ok := lookup(store, args[1])
+		if !ok {
+			return nil
+		}
+		deadline := strconv.FormatInt(ent.expiresAt.UnixMilli(), 10)
+		cmds = append(cmds, []string{"PEXPIREAT", args[1], deadline})
+		return cmds
+	}
+	if cmd == "SET" && len(args) == 5 {
+		ent, ok := lookup(store, args[1])
+		if !ok {
+			return nil
+		}
+		deadline := strconv.FormatInt(ent.expiresAt.UnixMilli(), 10) 
+		cmds = append(cmds, []string{"SET", args[1], args[2]})
+		cmds = append(cmds, []string{"PEXPIREAT", args[1], deadline})
+		return cmds
+	}
+	cmds = append(cmds, args)
+	return cmds
+}
 
 func dispatch(store map[string]entry, args []string) resp.Value {
 	switch strings.ToUpper(args[0]) {
@@ -39,6 +67,14 @@ func dispatch(store map[string]entry, args []string) resp.Value {
 		return cmdRPop(store, args)
 	case "LPOP":
 		return cmdLPop(store, args)
+	case "HSET":
+		return cmdHSet(store, args)
+	case "HGET":
+		return cmdHGet(store, args)
+	case "HDEL":
+		return cmdHDel(store, args)
+	case "HGETALL":
+		return cmdHGetAll(store, args)
 	case "SADD":
 		return cmdSAdd(store, args)
 	case "SREM":
@@ -59,12 +95,33 @@ func dispatch(store map[string]entry, args []string) resp.Value {
 		return cmdZRank(store, args)
 	case "ZREM":
 		return cmdZRem(store, args)
+	case "PEXPIREAT":
+		return cmdPExpireAt(store, args)
 	default:
 		return resp.NewError("ERR unknown command name")
 	}
 }
 
-func RunCommander(requests chan Message) {
+var writeCommands = map[string]bool{
+	"SET": true,
+	"DEL": true,
+	"EXPIRE": true,
+	"INCR": true,
+	"DECR": true,
+	"LPUSH": true,
+	"RPUSH": true,
+	"LPOP": true,
+	"RPOP": true,
+	"HSET": true,
+	"HDEL": true,
+	"SADD": true,
+	"SREM": true,
+	"ZADD": true,
+	"ZREM": true,
+	"PEXPIREAT": true,
+}
+
+func RunCommander(requests chan Message, aof *AOF) {
 	store := make(map[string]entry)
 	ticker := time.NewTicker(time.Millisecond * time.Duration(100))
 	defer ticker.Stop()
@@ -75,7 +132,20 @@ func RunCommander(requests chan Message) {
 			if !ok {
 				return
 			}
-			msg.Reply <- dispatch(store, msg.Args)
+			reply := dispatch(store, msg.Args)
+			if aof != nil {
+				if writeCommands[strings.ToUpper(msg.Args[0])] && reply.Kind != resp.Error {
+					cmds := logForm(store, msg.Args)
+					for _, cmd := range cmds {
+						res := resp.Command(cmd)
+						err := aof.Append(res.Encode())
+						if err != nil {
+							log.Fatal(err)
+						}
+					}
+				}
+			}
+			msg.Reply <- reply
 
 		case <-ticker.C:
 			sweep(store)
