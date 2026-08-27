@@ -430,7 +430,7 @@ func TestWrongType(t *testing.T) {
 	store := make(map[string]entry)
 	cmdSet(store, []string{"SET", "str", "v"})
 	cmdRPush(store, []string{"RPUSH", "list", "a"})
-	HSet(store, []string{"HSET", "hash", "f", "v"})
+	cmdHSet(store, []string{"HSET", "hash", "f", "v"})
 	cmdSAdd(store, []string{"SADD", "set", "m"})
 	store["zset"] = zsetEntry(zpair{"m", 1})
 
@@ -446,10 +446,10 @@ func TestWrongType(t *testing.T) {
 		{"LRANGE on string", cmdLRange, []string{"LRANGE", "str", "0", "-1"}},
 		{"LPOP on string", cmdLPop, []string{"LPOP", "str"}},
 		{"RPOP on string", cmdRPop, []string{"RPOP", "str"}},
-		{"HSET on string", HSet, []string{"HSET", "str", "f", "v"}},
-		{"HGET on string", HGet, []string{"HGET", "str", "f"}},
-		{"HDEL on string", HDel, []string{"HDEL", "str", "f"}},
-		{"HGETALL on string", HGetAll, []string{"HGETALL", "str"}},
+		{"HSET on string", cmdHSet, []string{"HSET", "str", "f", "v"}},
+		{"HGET on string", cmdHGet, []string{"HGET", "str", "f"}},
+		{"HDEL on string", cmdHDel, []string{"HDEL", "str", "f"}},
+		{"HGETALL on string", cmdHGetAll, []string{"HGETALL", "str"}},
 		{"SADD on string", cmdSAdd, []string{"SADD", "str", "m"}},
 		{"SREM on string", cmdSRem, []string{"SREM", "str", "m"}},
 		{"SISMEMBER on string", cmdSIsMember, []string{"SISMEMBER", "str", "m"}},
@@ -469,7 +469,7 @@ func TestWrongType(t *testing.T) {
 		{"GET on zset", cmdGet, []string{"GET", "zset"}},
 		// and across the non-string types
 		{"LPUSH on hash", cmdLPush, []string{"LPUSH", "hash", "x"}},
-		{"HSET on set", HSet, []string{"HSET", "set", "f", "v"}},
+		{"HSET on set", cmdHSet, []string{"HSET", "set", "f", "v"}},
 		{"SADD on zset", cmdSAdd, []string{"SADD", "zset", "m"}},
 	}
 	for _, tc := range cases {
@@ -481,7 +481,7 @@ func TestWrongType(t *testing.T) {
 	// none of the rejected calls may have clobbered the existing entries
 	assertBulkString(t, cmdGet(store, []string{"GET", "str"}), "v")
 	assertArray(t, cmdLRange(store, []string{"LRANGE", "list", "0", "-1"}), []string{"a"})
-	assertBulkString(t, HGet(store, []string{"HGET", "hash", "f"}), "v")
+	assertBulkString(t, cmdHGet(store, []string{"HGET", "hash", "f"}), "v")
 	assertInteger(t, cmdSIsMember(store, []string{"SISMEMBER", "set", "m"}), 1)
 }
 
@@ -613,78 +613,78 @@ func TestHSet(t *testing.T) {
 	store := make(map[string]entry)
 
 	// counts only newly created fields
-	assertInteger(t, HSet(store, []string{"HSET", "h", "f1", "v1", "f2", "v2"}), 2)
-	assertInteger(t, HSet(store, []string{"HSET", "h", "f1", "changed"}), 0)
-	assertBulkString(t, HGet(store, []string{"HGET", "h", "f1"}), "changed")
+	assertInteger(t, cmdHSet(store, []string{"HSET", "h", "f1", "v1", "f2", "v2"}), 2)
+	assertInteger(t, cmdHSet(store, []string{"HSET", "h", "f1", "changed"}), 0)
+	assertBulkString(t, cmdHGet(store, []string{"HGET", "h", "f1"}), "changed")
 
 	// mixed new and overwrite in one call
-	assertInteger(t, HSet(store, []string{"HSET", "h", "f1", "again", "f3", "v3"}), 1)
-	assertBulkString(t, HGet(store, []string{"HGET", "h", "f3"}), "v3")
+	assertInteger(t, cmdHSet(store, []string{"HSET", "h", "f1", "again", "f3", "v3"}), 1)
+	assertBulkString(t, cmdHGet(store, []string{"HGET", "h", "f3"}), "v3")
 
 	// same field twice in one call: created once, last value wins
-	assertInteger(t, HSet(store, []string{"HSET", "h2", "f", "a", "f", "b"}), 1)
-	assertBulkString(t, HGet(store, []string{"HGET", "h2", "f"}), "b")
+	assertInteger(t, cmdHSet(store, []string{"HSET", "h2", "f", "a", "f", "b"}), 1)
+	assertBulkString(t, cmdHGet(store, []string{"HGET", "h2", "f"}), "b")
 
 	// HSET must preserve an existing TTL
 	cmdExpire(store, []string{"EXPIRE", "h", "100"})
-	HSet(store, []string{"HSET", "h", "f4", "v4"})
+	cmdHSet(store, []string{"HSET", "h", "f4", "v4"})
 	assertInteger(t, cmdTTL(store, []string{"TTL", "h"}), 100)
 
 	// dangling field name or too few args -> Error
-	assertKind(t, HSet(store, []string{"HSET", "h", "f1", "v1", "f2"}), resp.Error)
-	assertKind(t, HSet(store, []string{"HSET", "h", "f1"}), resp.Error)
-	assertKind(t, HSet(store, []string{"HSET", "h"}), resp.Error)
+	assertKind(t, cmdHSet(store, []string{"HSET", "h", "f1", "v1", "f2"}), resp.Error)
+	assertKind(t, cmdHSet(store, []string{"HSET", "h", "f1"}), resp.Error)
+	assertKind(t, cmdHSet(store, []string{"HSET", "h"}), resp.Error)
 }
 
 func TestHGet(t *testing.T) {
 	store := make(map[string]entry)
-	HSet(store, []string{"HSET", "h", "f", "v"})
+	cmdHSet(store, []string{"HSET", "h", "f", "v"})
 
-	assertBulkString(t, HGet(store, []string{"HGET", "h", "f"}), "v")
+	assertBulkString(t, cmdHGet(store, []string{"HGET", "h", "f"}), "v")
 
 	// missing field and missing key both -> Null
-	assertKind(t, HGet(store, []string{"HGET", "h", "missing"}), resp.Null)
-	assertKind(t, HGet(store, []string{"HGET", "missing", "f"}), resp.Null)
+	assertKind(t, cmdHGet(store, []string{"HGET", "h", "missing"}), resp.Null)
+	assertKind(t, cmdHGet(store, []string{"HGET", "missing", "f"}), resp.Null)
 
 	// wrong arg counts -> Error
-	assertKind(t, HGet(store, []string{"HGET", "h"}), resp.Error)
-	assertKind(t, HGet(store, []string{"HGET", "h", "f", "x"}), resp.Error)
+	assertKind(t, cmdHGet(store, []string{"HGET", "h"}), resp.Error)
+	assertKind(t, cmdHGet(store, []string{"HGET", "h", "f", "x"}), resp.Error)
 }
 
 // ---------- HDEL / HGETALL ----------
 
 func TestHDel(t *testing.T) {
 	store := make(map[string]entry)
-	HSet(store, []string{"HSET", "h", "f1", "v1", "f2", "v2", "f3", "v3"})
+	cmdHSet(store, []string{"HSET", "h", "f1", "v1", "f2", "v2", "f3", "v3"})
 
 	// counts only fields that existed
-	assertInteger(t, HDel(store, []string{"HDEL", "h", "f1", "missing"}), 1)
-	assertKind(t, HGet(store, []string{"HGET", "h", "f1"}), resp.Null)
+	assertInteger(t, cmdHDel(store, []string{"HDEL", "h", "f1", "missing"}), 1)
+	assertKind(t, cmdHGet(store, []string{"HGET", "h", "f1"}), resp.Null)
 
 	// deleting the last field removes the key entirely
-	assertInteger(t, HDel(store, []string{"HDEL", "h", "f2", "f3"}), 2)
+	assertInteger(t, cmdHDel(store, []string{"HDEL", "h", "f2", "f3"}), 2)
 	assertInteger(t, cmdExists(store, []string{"EXISTS", "h"}), 0)
 
 	// missing key -> 0
-	assertInteger(t, HDel(store, []string{"HDEL", "missing", "f"}), 0)
+	assertInteger(t, cmdHDel(store, []string{"HDEL", "missing", "f"}), 0)
 
 	// wrong arg counts -> Error
-	assertKind(t, HDel(store, []string{"HDEL", "h"}), resp.Error)
-	assertKind(t, HDel(store, []string{"HDEL"}), resp.Error)
+	assertKind(t, cmdHDel(store, []string{"HDEL", "h"}), resp.Error)
+	assertKind(t, cmdHDel(store, []string{"HDEL"}), resp.Error)
 }
 
 func TestHGetAll(t *testing.T) {
 	store := make(map[string]entry)
-	HSet(store, []string{"HSET", "h", "f1", "v1", "f2", "v2"})
+	cmdHSet(store, []string{"HSET", "h", "f1", "v1", "f2", "v2"})
 
-	assertHashReply(t, HGetAll(store, []string{"HGETALL", "h"}), map[string]string{"f1": "v1", "f2": "v2"})
+	assertHashReply(t, cmdHGetAll(store, []string{"HGETALL", "h"}), map[string]string{"f1": "v1", "f2": "v2"})
 
 	// missing key -> empty Array, NOT Null
-	assertArray(t, HGetAll(store, []string{"HGETALL", "missing"}), []string{})
+	assertArray(t, cmdHGetAll(store, []string{"HGETALL", "missing"}), []string{})
 
 	// wrong arg counts -> Error
-	assertKind(t, HGetAll(store, []string{"HGETALL"}), resp.Error)
-	assertKind(t, HGetAll(store, []string{"HGETALL", "h", "x"}), resp.Error)
+	assertKind(t, cmdHGetAll(store, []string{"HGETALL"}), resp.Error)
+	assertKind(t, cmdHGetAll(store, []string{"HGETALL", "h", "x"}), resp.Error)
 }
 
 // ---------- SADD / SREM / SISMEMBER / SMEMBERS / SCARD ----------
