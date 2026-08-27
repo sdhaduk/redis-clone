@@ -123,6 +123,9 @@ var writeCommands = map[string]bool{
 
 func RunCommander(requests chan Message, aof *AOF) {
 	store := make(map[string]entry)
+	if aof != nil {
+		aof.load(store)
+	}
 	ticker := time.NewTicker(time.Millisecond * time.Duration(100))
 	defer ticker.Stop()
 
