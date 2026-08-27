@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
+	"redis-clone/resp"
 	"time"
 )
 
@@ -34,6 +36,41 @@ type AOF struct {
 	file   *os.File
 	policy policyType
 	writes chan []byte
+	path   string
+}
+
+func replayFrom(r io.Reader, store map[string]entry) {
+	reader := bufio.NewReader(r)
+	cmdsLoaded := 0
+	for {
+		val, err := resp.Decode(reader)
+		if err == io.EOF {
+			return
+		}
+		if err != nil {
+			log.Printf("Error: could not decode the log file; %d commands were executed", cmdsLoaded)
+			return
+		}
+		args, err := val.Args()
+		if err != nil {
+			log.Printf("Error: could not decode bytes into arguments; %d commands were executed", cmdsLoaded)
+			return
+		}
+		dispatch(store, args)
+		cmdsLoaded += 1
+	}
+}
+
+func (aof *AOF) load(store map[string]entry) {
+	f, err := os.Open(aof.path)
+	if errors.Is(err, os.ErrNotExist) {
+		return
+	}
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer f.Close()
+	replayFrom(f, store)
 }
 
 func NewAOF(path string, policy policyType) (*AOF, error) {
@@ -41,7 +78,7 @@ func NewAOF(path string, policy policyType) (*AOF, error) {
 	if err != nil {
 		return nil, err
 	}
-	aof := &AOF{file: file, policy: policy, writes: make(chan []byte, 512)}
+	aof := &AOF{file: file, policy: policy, writes: make(chan []byte, 512), path: path}
 
 	if aof.policy != Always {
 		go aof.run()
