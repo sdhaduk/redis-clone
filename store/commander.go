@@ -1,6 +1,7 @@
 package store
 
 import (
+	"fmt"
 	"log"
 	"redis-clone/resp"
 	"strconv"
@@ -134,6 +135,19 @@ func RunCommander(requests chan Message, aof *AOF) {
 		case msg, ok := <-requests:
 			if !ok {
 				return
+			}
+			if strings.ToUpper(msg.Args[0]) == "REWRITEAOF" && aof != nil {
+				err := aof.rewrite(store)
+				reply := resp.Value{}
+				
+				if err != nil {
+					reply = resp.Value{Kind: resp.Error, Str: fmt.Sprintf("Error rewriting AOF: %v", err)}
+				} else {
+					reply = resp.Value{Kind: resp.Integer, Num: 1}
+				}
+
+				msg.Reply <- reply
+				continue
 			}
 			reply := dispatch(store, msg.Args)
 			if aof != nil {
